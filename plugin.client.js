@@ -2559,6 +2559,7 @@ window.__ModuleLoader__.load({
 .tc-overlay{position:fixed;inset:0;z-index:2147483000;display:flex;justify-content:flex-end;pointer-events:none}
 body.tc-overlay-open:not(.tc-overlay-composer) [data-composer-seat],body.tc-overlay-open:not(.tc-overlay-composer) [data-conversation-region="composer"],body.tc-overlay-open:not(.tc-overlay-composer) [data-composer-card],body.tc-overlay-open:not(.tc-overlay-composer) [data-composer-input],body.tc-overlay-open:not(.tc-overlay-composer) [data-composer-dock],body.tc-overlay-open:not(.tc-overlay-composer) [data-composer-overlay],body.tc-overlay-open:not(.tc-overlay-composer) [data-conversation-composer-overlay]{display:none!important}
 .tc-overlay-panel{position:relative;pointer-events:auto;max-width:92vw;height:100%;display:flex;flex-direction:column;background:var(--dsw-alias-bg-base);border-left:1px solid var(--dsw-alias-border-l1);box-shadow:-12px 0 32px rgba(0,0,0,.18);will-change:transform;animation:tc-overlay-in .24s cubic-bezier(.22,1,.36,1)}
+body.tc-overlay-composer .tc-overlay-panel{height:calc(100% - 116px)}
 .tc-overlay-panel--closing{animation:tc-overlay-out .23s cubic-bezier(.4,0,.2,1) forwards;pointer-events:none}
 @keyframes tc-overlay-in{from{transform:translateX(100%);opacity:.85}to{transform:translateX(0);opacity:1}}
 @keyframes tc-overlay-out{from{transform:translateX(0);opacity:1}to{transform:translateX(100%);opacity:.9}}
