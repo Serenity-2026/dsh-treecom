@@ -2,7 +2,7 @@
 
 > Tree-shaped conversation branching for DeepSeek Harness. Keep one visible conversation; manage its branches as a tree.
 >
-> 版本 **0.1.0** · MIT · DeepSeek Harness Web 插件
+> 版本 **0.2.0** · MIT · DeepSeek Harness Web 插件
 
 用一个对话窗口和一棵可平移的画布树管理它的分支；分支仍然是普通会话，会出现在左侧工作区：
 
