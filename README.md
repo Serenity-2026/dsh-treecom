@@ -39,25 +39,30 @@ DSH 官方支持的分支原语是 fork：把某一轮之前的完整事件前�
 
 ## 安装
 
-从 GitHub 克隆后安装：
+`dsh plugin` 会把参数转发给 profile 目录里的 pnpm，因此 npm 包名、`github:`、`link:`、`file:` 等 pnpm 支持的 spec 都可以。
+
+从 GitHub 直接安装（当前可用）：
+
+```bash
+dsh plugin --profile web add github:Serenity-2026/dsh-treecom
+```
+
+发布到 npm 后，也可以只写包名：
+
+```bash
+dsh plugin --profile web add dsh-treecom
+```
+
+本地开发时，克隆后把目录 link 进 profile：
 
 ```bash
 git clone https://github.com/Serenity-2026/dsh-treecom.git
-cd dsh-treecom
+dsh plugin --profile web add link:"$PWD/dsh-treecom"
 ```
 
-然后在 DSH 中把该目录作为本地 bundle 安装：
+安装或更新后刷新 DSH Web 页面（Host 半的 `/treecom` 路由需要重新加载）。
 
-- 用 DSH 的插件管理界面选择「从本地安装」，指向 clone 下来的 `dsh-treecom` 目录；或
-- 让 DSH 助手执行：
-
-  ```
-  plugin_manager install_bundle target="<clone 的绝对路径>/dsh-treecom"
-  ```
-
-安装后刷新 DSH Web 页面（Host 半的 `/treecom` 路由需要重新加载）。
-
-> 仓库名是 `dsh-treecom`，包名是 `treecom`；两者是同一个插件。
+> 仓库名是 `dsh-treecom`，当前 npm 包名是 `treecom`；npm 上计划使用 `dsh-treecom`。在 npm 发布前，请使用上面的 `github:` spec。
 
 ## 使用
 
