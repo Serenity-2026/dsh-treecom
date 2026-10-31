@@ -82,7 +82,7 @@ window.__ModuleLoader__.load({
       'node.afterLabel': '后续轮数',
       'node.canvasHint': '拖动空白处平移画布 · 点击节点查看详情',
       'node.center': '回到当前',
-      'node.fit': '整棵树',
+      'node.fit': '居中',
       'node.selectHint': '点击树上的节点查看详情',
       'node.rootDetail': '这是这段对话的起点。',
       'node.hoverHint': '点击查看详情',
@@ -1133,7 +1133,7 @@ window.__ModuleLoader__.load({
             onPointerDown: (event) => event.stopPropagation(),
             onClick: (event) => {
               event.stopPropagation()
-              centerOn(selectedId ?? activeId ?? null)
+              centerOn(activeId ?? selectedId ?? null)
             },
           }, translate('node.center')),
           h('button', {
@@ -1161,6 +1161,7 @@ window.__ModuleLoader__.load({
       const [renaming, setRenaming] = useState(false)
       const [value, setValue] = useState('')
       const inputRef = useRef(null)
+      const bodyRef = useRef(null)
       const renamingRef = useRef(false)
       const nodeId = node?.id ?? null
       const endSeq = node?.endSeq ?? null
@@ -1172,6 +1173,7 @@ window.__ModuleLoader__.load({
         setValue(node?.label ?? '')
         setDetail(null)
         setLoadError(null)
+        if (bodyRef.current !== null) bodyRef.current.scrollTop = 0
       }, [nodeId])
 
       useEffect(() => {
@@ -1338,7 +1340,7 @@ window.__ModuleLoader__.load({
             ? h('div', { className: 'tc-side-sub' }, node.label)
             : null,
           badges.length > 0 ? h('div', { className: 'tc-side-badges' }, badges) : null),
-        h('div', { className: 'tc-side-body' },
+        h('div', { ref: bodyRef, className: 'tc-side-body' },
           h('div', { className: 'tc-side-stats' },
             h('div', { className: 'tc-side-stat' },
               h('div', { className: 'tc-side-stat-label' }, translate('node.contextLabel')),
