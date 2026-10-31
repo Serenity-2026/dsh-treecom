@@ -84,6 +84,9 @@ window.__ModuleLoader__.load({
       'node.hoverHint': '点击查看详情',
       'node.chainHint': '连续 {n} 轮 · 点击展开',
       'node.chainAria': '连续 {n} 轮，点击展开',
+      'node.chainCollapse': '折叠 {n} 轮',
+      'node.copy': '复制',
+      'node.copied': '已复制',
       'node.leafHint': '切到这条分支',
       'action.branch': '分叉',
       'action.branchHint': '从这一轮分叉，开一条新的对话分支',
@@ -157,6 +160,9 @@ window.__ModuleLoader__.load({
       'node.hoverHint': 'Click for details',
       'node.chainHint': '{n} turns · click to expand',
       'node.chainAria': '{n} consecutive turns; click to expand',
+      'node.chainCollapse': 'Collapse {n} turns',
+      'node.copy': 'Copy',
+      'node.copied': 'Copied',
       'node.leafHint': 'Switch to this branch',
       'action.branch': 'Branch',
       'action.branchHint': 'Branch from this turn into a new conversation branch',
@@ -194,6 +200,32 @@ window.__ModuleLoader__.load({
       if (typeof value !== 'string' || value === '') return ''
       const date = new Date(value)
       return Number.isNaN(date.getTime()) ? '' : date.toLocaleString()
+    }
+
+    async function copyToClipboard(text) {
+      if (text === '') return false
+      try {
+        if (typeof navigator !== 'undefined' && navigator.clipboard !== undefined && typeof navigator.clipboard.writeText === 'function') {
+          await navigator.clipboard.writeText(text)
+          return true
+        }
+      } catch {
+        /* fall through to the legacy path */
+      }
+      try {
+        if (typeof document === 'undefined') return false
+        const area = document.createElement('textarea')
+        area.value = text
+        area.style.position = 'fixed'
+        area.style.top = '-1000px'
+        document.body.appendChild(area)
+        area.select()
+        const ok = document.execCommand('copy')
+        area.remove()
+        return ok === true
+      } catch {
+        return false
+      }
     }
 
     const detailCache = new Map()
@@ -276,8 +308,12 @@ window.__ModuleLoader__.load({
       useEffect(() => {
         revisionRef.current = liveRevision
       }, [liveRevision])
-      const reload = useCallback(async () => {
+      const reload = useCallback(async (force = false) => {
         const token = generation.current
+        if (force === true) {
+          treeDataCache.delete(sessionId)
+          inflight.delete(sessionId)
+        }
         try {
           const data = await fetchTree(sessionId)
           treeDataCache.set(sessionId, { data, revision: revisionRef.current })
@@ -376,11 +412,12 @@ window.__ModuleLoader__.load({
             members.push(current)
           }
           const key = `${members[0].id}~${current.id}`
+          const chainInfo = { key, count: members.length, startId: members[0].id, endId: current.id }
           if (expandedChains.has(key) !== true) {
             addNode(current, parentId)
             for (const child of visibleChildren(current)) addSubtree(child, current.id)
-            chainByRep.set(current.id, { key, count: members.length, startId: members[0].id, endId: current.id })
-            for (const member of members.slice(0, -1)) chainByMember.set(member.id, current.id)
+            chainByRep.set(current.id, chainInfo)
+            for (const member of members) chainByMember.set(member.id, { ...chainInfo, expanded: false })
             return
           }
           let previous = parentId
@@ -388,6 +425,7 @@ window.__ModuleLoader__.load({
             addNode(member, previous)
             previous = member.id
           }
+          for (const member of members) chainByMember.set(member.id, { ...chainInfo, expanded: true })
           for (const child of visibleChildren(current)) addSubtree(child, current.id)
           return
         }
@@ -517,6 +555,12 @@ window.__ModuleLoader__.load({
           return h('svg', common, h('path', { d: 'M2.5 3.5h11v2.2h-11zM4 5.7v6.8h8V5.7M6.3 8.2h3.4' }))
         case 'dot':
           return h('svg', common, h('circle', { cx: 8, cy: 8, r: 2.4, fill: 'currentColor', stroke: 'none' }))
+        case 'copy':
+          return h('svg', common,
+            h('rect', { x: 5.5, y: 5.5, width: 7, height: 8, rx: 1 }),
+            h('path', { d: 'M3.5 10.5V3.5h7' }))
+        case 'check':
+          return h('svg', common, h('path', { d: 'M3.5 8.5l3 3 6-7' }))
         default:
           return null
       }
@@ -1122,7 +1166,7 @@ window.__ModuleLoader__.load({
     }
 
     function TreeCanvas(props) {
-      const { index, hiddenIds, selectedId, activeId, selectedPath, afterFor, chainByRep, onExpand, onSelect, sessionId } = props
+      const { index, hiddenIds, selectedId, activeId, selectedPath, afterFor, chainByRep, chainByMember, onExpand, onCollapse, onSelect, sessionId } = props
       const layout = useMemo(() => layoutTree(index, hiddenIds), [index, hiddenIds])
       const wrapRef = useRef(null)
       const [pan, setPan] = useState({ x: 0, y: 0 })
@@ -1135,6 +1179,7 @@ window.__ModuleLoader__.load({
       const tipCloseTimer = useRef(null)
       const dragRef = useRef(null)
       const suppressClick = useRef(false)
+      const tipPointerDown = useRef(false)
       const centeredSession = useRef(null)
       const panRef = useRef(pan)
       const zoomRef = useRef(1)
@@ -1238,6 +1283,16 @@ window.__ModuleLoader__.load({
         }
         wrap.addEventListener('wheel', onWheel, { passive: false })
         return () => { wrap.removeEventListener('wheel', onWheel) }
+      }, [])
+
+      useEffect(() => {
+        const releaseTipPointer = () => { tipPointerDown.current = false }
+        window.addEventListener('pointerup', releaseTipPointer)
+        window.addEventListener('pointercancel', releaseTipPointer)
+        return () => {
+          window.removeEventListener('pointerup', releaseTipPointer)
+          window.removeEventListener('pointercancel', releaseTipPointer)
+        }
       }, [])
 
       const isElement = (value) => typeof Element !== 'undefined' && value instanceof Element
@@ -1382,7 +1437,7 @@ window.__ModuleLoader__.load({
 
       let tipElement = null
       if (tip !== null) {
-        const tipChain = chainByRep?.get(tip.node.id) ?? null
+        const tipChain = chainByRep?.get(tip.node.id) ?? chainByMember?.get(tip.node.id) ?? null
         const tipContext = contextInfo(tip.node)
         const tipTurn = tip.node.kind === 'root'
           ? translate('path.root')
@@ -1413,14 +1468,24 @@ window.__ModuleLoader__.load({
             maxHeight: `${tip.maxHeight}px`,
           },
           onMouseEnter: cancelHideTip,
-          onMouseLeave: scheduleHideTip,
-          onPointerDown: (event) => event.stopPropagation(),
+          onMouseLeave: () => { if (!tipPointerDown.current) scheduleHideTip() },
+          onPointerDown: (event) => { event.stopPropagation(); tipPointerDown.current = true; cancelHideTip() },
+          onPointerUp: () => { tipPointerDown.current = false },
+          onPointerCancel: () => { tipPointerDown.current = false },
           onClick: (event) => event.stopPropagation(),
         },
           h('div', { className: 'tc-tip-head' },
             h('span', { className: 'tc-tip-turn' }, tipTurn),
             tip.node.id === activeId ? h('span', { className: 'tc-tip-here' }, translate('node.youAreHere')) : null),
-          tipChain !== null ? h('div', { className: 'tc-tip-chain' }, fmt(translate('node.chainHint'), { n: tipChain.count })) : null,
+          tipChain !== null
+            ? (tipChain.expanded === true
+                ? h('button', {
+                    type: 'button',
+                    className: 'tc-tip-chain tc-tip-chain--action',
+                    onClick: (event) => { event.stopPropagation(); hideTipNow(); onCollapse(tipChain) },
+                  }, fmt(translate('node.chainCollapse'), { n: tipChain.count }))
+                : h('div', { className: 'tc-tip-chain' }, fmt(translate('node.chainHint'), { n: tipChain.count })))
+            : null,
           h('div', { className: 'tc-tip-meta' },
             tipContext.hasContext ? `${tipContext.contextPct}%` : translate('node.contextUnknown'),
             ' · ',
@@ -1434,7 +1499,20 @@ window.__ModuleLoader__.load({
               h('div', { className: 'tc-tip-text' }, h(MarkdownText, { text: tipAnswerText, className: 'tc-md--tip' }))),
             tipErrorText !== null ? h('div', { className: 'tc-tip-error' }, tipErrorText) : null,
             tipDetail?.truncated === true ? h('div', { className: 'tc-tip-note' }, translate('node.detailTruncated')) : null),
-          h('div', { className: 'tc-tip-hint' }, translate('node.hoverHint')))
+          h('button', {
+            type: 'button',
+            className: 'tc-tip-hint tc-tip-hint--action',
+            onClick: (event) => {
+              event.stopPropagation()
+              let selectedText = ''
+              try { selectedText = window.getSelection()?.toString() ?? '' } catch { /* no selection API */ }
+              if (selectedText.trim() !== '') return
+              hideTipNow()
+              const expandable = chainByRep?.get(tip.node.id) ?? null
+              if (expandable !== null) onExpand(expandable)
+              else onSelect(tip.node)
+            },
+          }, translate('node.hoverHint')))
       }
 
       return h('div', {
@@ -1500,9 +1578,11 @@ window.__ModuleLoader__.load({
       const [loadError, setLoadError] = useState(null)
       const [renaming, setRenaming] = useState(false)
       const [value, setValue] = useState('')
+      const [copied, setCopied] = useState(null)
       const inputRef = useRef(null)
       const bodyRef = useRef(null)
       const renamingRef = useRef(false)
+      const copyTimer = useRef(null)
       const nodeId = node?.id ?? null
       const endSeq = node?.endSeq ?? null
       const cacheKey = nodeId === null ? null : `${nodeId}:${endSeq ?? ''}`
@@ -1511,10 +1591,15 @@ window.__ModuleLoader__.load({
         renamingRef.current = false
         setRenaming(false)
         setValue(node?.label ?? '')
+        setCopied(null)
         setDetail(null)
         setLoadError(null)
         if (bodyRef.current !== null) bodyRef.current.scrollTop = 0
       }, [nodeId])
+
+      useEffect(() => () => {
+        if (copyTimer.current !== null) clearTimeout(copyTimer.current)
+      }, [])
 
       useEffect(() => {
         if (!renaming) return undefined
@@ -1592,6 +1677,36 @@ window.__ModuleLoader__.load({
           : node.open === true
             ? translate('node.detailWaiting')
             : translate('node.answerEmpty')
+
+      const copySection = async (kind, text) => {
+        if (text === '') return
+        const ok = await copyToClipboard(text)
+        if (!ok) return
+        setCopied(kind)
+        if (copyTimer.current !== null) clearTimeout(copyTimer.current)
+        copyTimer.current = setTimeout(() => {
+          copyTimer.current = null
+          setCopied(null)
+        }, 1500)
+      }
+
+      const copyButton = (kind, text) => h('button', {
+        type: 'button',
+        className: `tc-copy-btn${copied === kind ? ' tc-copy-btn--done' : ''}`,
+        disabled: text === '',
+        title: translate(copied === kind ? 'node.copied' : 'node.copy'),
+        'aria-label': translate(copied === kind ? 'node.copied' : 'node.copy'),
+        onClick: (event) => {
+          event.stopPropagation()
+          copySection(kind, text)
+        },
+      },
+        h(Icon, { name: copied === kind ? 'check' : 'copy', size: 11 }),
+        copied === kind ? translate('node.copied') : translate('node.copy'))
+
+      const chatHead = (kind, label, text) => h('div', { className: 'tc-chat-head' },
+        h('span', { className: 'tc-chat-label' }, label),
+        copyButton(kind, text))
       const title = node.kind === 'root'
         ? translate('path.root')
         : node.kind === 'blank'
@@ -1699,9 +1814,9 @@ window.__ModuleLoader__.load({
             ? h('div', { className: 'tc-side-empty' }, translate('node.rootDetail'))
             : h('div', { className: 'tc-chat' },
                 loadError !== null ? h('div', { className: 'tc-side-error' }, fmt(translate('node.detailFailed'), { message: loadError })) : null,
-                h('div', { className: 'tc-chat-label' }, translate('node.questionLabel')),
+                chatHead('question', translate('node.questionLabel'), question),
                 h('div', { className: 'tc-chat-bubble tc-chat-bubble--user' }, question !== '' ? h(MarkdownText, { text: question }) : h('div', { className: 'tc-md-placeholder' }, translate('node.waiting'))),
-                h('div', { className: 'tc-chat-label' }, translate('node.answerLabel')),
+                chatHead('answer', translate('node.answerLabel'), answer),
                 h('div', { className: `tc-chat-bubble tc-chat-bubble--assistant${loading ? ' tc-chat-bubble--loading' : ''}` }, h(MarkdownText, { text: answerText })),
                 detail?.truncated === true ? h('div', { className: 'tc-side-note' }, translate('node.detailTruncated')) : null,
                 detail?.time ? h('div', { className: 'tc-side-note' }, formatTime(detail.time)) : null)))
@@ -1981,7 +2096,7 @@ window.__ModuleLoader__.load({
       const resolveDisplayId = (id) => {
         if (displayIndex === null || id === null) return null
         if (displayIndex.byId.has(id)) return id
-        return displayIndex.chainByMember.get(id) ?? null
+        return displayIndex.chainByMember.get(id)?.endId ?? null
       }
       const displaySelectedId = resolveDisplayId(effectiveSelectedId)
       const displayActiveId = resolveDisplayId(activeLeafId)
@@ -1992,6 +2107,17 @@ window.__ModuleLoader__.load({
           if (current.has(chain.key)) return current
           const next = new Set(current)
           next.add(chain.key)
+          return next
+        })
+        if (chain.endId !== undefined) setSelectedId(chain.endId)
+      }
+
+      const collapseChain = (chain) => {
+        if (chain === null || chain === undefined) return
+        setExpandedChains((current) => {
+          if (!current.has(chain.key)) return current
+          const next = new Set(current)
+          next.delete(chain.key)
           return next
         })
         if (chain.endId !== undefined) setSelectedId(chain.endId)
@@ -2189,7 +2315,9 @@ window.__ModuleLoader__.load({
                   selectedPath,
                   afterFor,
                   chainByRep: displayIndex?.chainByRep ?? null,
+                  chainByMember: displayIndex?.chainByMember ?? null,
                   onExpand: expandChain,
+                  onCollapse: collapseChain,
                   onSelect: (node) => setSelectedId(node.id),
                   sessionId,
                 }),
@@ -2422,7 +2550,7 @@ body.tc-view-tree-open [data-composer-seat],body.tc-view-tree-open [data-convers
 .tc-canvas-btn{height:24px;padding:0 8px;border:1px solid var(--dsw-alias-border-l1);border-radius:6px;background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-secondary);font:inherit;font-size:11px;cursor:pointer;white-space:nowrap}
 .tc-canvas-btn:hover{background:var(--dsw-alias-bg-layer-2);border-color:var(--dsw-alias-border-l2);color:var(--dsw-alias-label-primary)}
 .tc-canvas-hint{position:absolute;left:12px;bottom:10px;right:12px;z-index:5;color:var(--dsw-alias-label-tertiary);font-size:10px;pointer-events:none;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.tc-canvas-tip{position:absolute;z-index:30;width:320px;max-width:calc(100% - 24px);max-height:calc(100% - 16px);box-sizing:border-box;padding:9px 10px;border:1px solid var(--dsw-alias-border-l2);border-radius:8px;background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-primary);box-shadow:var(--dsw-elevation-panel,0 10px 28px rgba(0,0,0,.22));pointer-events:auto;font-size:11px;line-height:1.45;display:flex;flex-direction:column}
+.tc-canvas-tip{position:absolute;z-index:30;width:320px;max-width:calc(100% - 24px);max-height:calc(100% - 16px);box-sizing:border-box;padding:9px 10px;border:1px solid var(--dsw-alias-border-l2);border-radius:8px;background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-primary);box-shadow:var(--dsw-elevation-panel,0 10px 28px rgba(0,0,0,.22));pointer-events:auto;font-size:11px;line-height:1.45;display:flex;flex-direction:column;cursor:default;user-select:text}
 .tc-tip-head{display:flex;align-items:center;gap:6px;min-width:0}
 .tc-tip-turn{font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .tc-tip-here{margin-left:auto;padding:0 4px;border:1px solid var(--dsw-alias-state-success-primary);border-radius:4px;color:var(--dsw-alias-state-success-primary);font-size:10px;line-height:15px;white-space:nowrap}
@@ -2430,12 +2558,18 @@ body.tc-view-tree-open [data-composer-seat],body.tc-view-tree-open [data-convers
 .tc-tip-body{margin-top:6px;min-height:0;overflow-y:auto;overscroll-behavior:contain;display:flex;flex-direction:column;gap:7px;padding-right:2px}
 .tc-tip-section{min-width:0}
 .tc-tip-label{margin-bottom:2px;color:var(--dsw-alias-label-tertiary);font-size:10px;font-weight:600;letter-spacing:.02em}
-.tc-tip-text{white-space:pre-wrap;word-break:break-word;color:var(--dsw-alias-label-secondary);font-size:11px;line-height:1.5}
+.tc-tip-text{white-space:pre-wrap;word-break:break-word;color:var(--dsw-alias-label-secondary);font-size:11px;line-height:1.5;cursor:default;user-select:text}
+.tc-tip-text *{cursor:default}
+.tc-tip-text a{cursor:pointer}
+.tc-canvas-tip:active .tc-tip-text,.tc-canvas-tip:active .tc-tip-text *{cursor:text}
 .tc-tip-error{color:var(--dsw-alias-state-error-label);font-size:10px}
 .tc-tip-note{color:var(--dsw-alias-label-tertiary);font-size:10px}
 .tc-tip-meta{margin-top:5px;color:var(--dsw-alias-label-tertiary);font-size:10px;font-variant-numeric:tabular-nums}
-.tc-tip-hint{margin-top:3px;color:var(--dsw-alias-label-tertiary);font-size:10px}
+.tc-tip-hint{margin-top:3px;padding:0;border:0;background:none;color:var(--dsw-alias-label-tertiary);font:inherit;font-size:10px;text-align:left;cursor:pointer}
+.tc-tip-hint--action:hover{color:var(--dsw-alias-state-business-primary);text-decoration:underline}
 .tc-tip-chain{margin-top:5px;color:var(--dsw-alias-state-business-primary);font-size:10px;font-weight:500}
+.tc-tip-chain--action{padding:0;border:0;background:none;font:inherit;font-size:10px;font-weight:500;text-align:left;cursor:pointer}
+.tc-tip-chain--action:hover{text-decoration:underline}
 .tc-md{min-width:0;color:inherit;line-height:1.65;font-size:12px;overflow-wrap:anywhere;white-space:pre-wrap}
 .tc-md > :first-child{margin-top:0}
 .tc-md > :last-child{margin-bottom:0}
@@ -2485,7 +2619,13 @@ body.tc-view-tree-open [data-composer-seat],body.tc-view-tree-open [data-convers
 .tc-side-ctx-bar--warn > span{background:var(--dsw-alias-state-warn-primary,#d97706)}
 .tc-side-ctx-bar--error > span{background:var(--dsw-alias-state-error-primary,#dc2626)}
 .tc-chat{display:flex;flex-direction:column;gap:6px;min-width:0}
+.tc-chat-head{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-top:2px}
+.tc-chat-head .tc-chat-label{margin-top:0}
 .tc-chat-label{margin-top:2px;color:var(--dsw-alias-label-secondary);font-size:10px;font-weight:600;letter-spacing:.02em}
+.tc-copy-btn{display:inline-flex;align-items:center;gap:3px;padding:1px 5px;border:1px solid transparent;border-radius:4px;background:none;color:var(--dsw-alias-label-tertiary);font:inherit;font-size:10px;line-height:16px;cursor:pointer;opacity:.8}
+.tc-copy-btn:hover:not(:disabled){color:var(--dsw-alias-state-business-primary);border-color:var(--dsw-alias-border-l2);background:var(--dsw-alias-bg-layer-2);opacity:1}
+.tc-copy-btn:disabled{opacity:.35;cursor:default}
+.tc-copy-btn--done{color:var(--dsw-alias-state-success-primary);border-color:var(--dsw-alias-state-success-primary);opacity:1}
 .tc-chat-bubble{padding:8px 10px;border:1px solid var(--dsw-alias-border-l1);border-radius:8px;background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-primary);font-size:12px;line-height:1.55;white-space:pre-wrap;word-break:break-word;overflow-wrap:anywhere}
 .tc-chat-bubble--user{border-color:color-mix(in srgb,var(--dsw-alias-state-business-primary) 34%,var(--dsw-alias-border-l1));background:color-mix(in srgb,var(--dsw-alias-state-business-primary) 6%,var(--dsw-alias-bg-layer-1))}
 .tc-chat-bubble--assistant{background:var(--dsw-alias-bg-layer-1)}

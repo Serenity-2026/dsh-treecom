@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Chain nodes can be collapsed again: after expanding a linear stretch, hover any node in the chain and click “折叠 N 轮” in the preview.
+- Hover preview now uses a default arrow cursor, supports text selection (I-beam while dragging), and its bottom “点击查看详情” hint is clickable like the node itself.
+- Added copy buttons above the question and answer bubbles in the right detail pane, with a transient “已复制” state.
+- Manual refresh now clears the per-session cache and forces a fresh `/treecom` request instead of possibly reusing cached data.
+
 ## 0.2.0 — 2026-10-31
 
 - Replaced the floating overlay with the host right sidebar: the header "对话树" button now opens a `sidebar.right.pane.tab` tab, the conversation stays visible, and the host sidebar owns close/resize. Removed the overlay registration, overlay state, and overlay CSS entirely; the remaining entries are the Conversation "对话树" view tab and the header button.
