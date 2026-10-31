@@ -2,11 +2,12 @@
 
 ## Unreleased
 
-- Full-width tree cards with a fixed left depth gutter; long conversations no longer narrow with depth.
-- Compact node cards: only the user's first question is shown; the model answer excerpt is gone.
-- Right-side node status shows context-window usage (percentage and mini bar) and how many turns follow the node.
-- Hovering a node opens a detail card with the full question/answer plus archive, rename, and fork actions; the card actions row is removed.
-- Host `/treecom` now returns per-turn context usage and serves an on-demand `detail` action for full conversation text.
+- Replaced the list tree with a pannable canvas: circular nodes and curved edges, root on the right, branches growing left; drag empty space to pan without bounds.
+- Clicking a node now selects it and opens a right-side detail pane instead of switching branches; a "Go to this turn" action performs the switch and jump.
+- Right pane shows context-window usage (percentage, bar, exact tokens), turns following the node, a scrollable full question/answer preview, and archive/rename/fork actions.
+- Hovering a node shows a compact preview with the turn, user question, context usage, and turns after.
+- Removed the old list cards, per-card status column, and collapse controls; the overlay is now 820px by default (560–1100px resizable).
+- Host `/treecom` serves per-turn context usage and an on-demand `detail` action for full conversation text.
 
 ## 0.1.0 — 2026-10-31
 

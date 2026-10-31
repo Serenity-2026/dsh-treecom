@@ -78,6 +78,14 @@ window.__ModuleLoader__.load({
       'node.detailLoading': '正在读取完整对话…',
       'node.detailFailed': '详情读取失败：{message}',
       'node.detailTruncated': '内容较长，已截断。',
+      'node.jump': '回到这一轮',
+      'node.afterLabel': '后续轮数',
+      'node.canvasHint': '拖动空白处平移画布 · 点击节点查看详情',
+      'node.center': '回到当前',
+      'node.fit': '整棵树',
+      'node.selectHint': '点击树上的节点查看详情',
+      'node.rootDetail': '这是这段对话的起点。',
+      'node.hoverHint': '点击查看详情',
       'panel.resize': '拖动调整宽度',
       'node.leafHint': '切到这条分支',
       'action.branch': '分叉',
@@ -143,6 +151,14 @@ window.__ModuleLoader__.load({
       'node.detailLoading': 'Reading the full conversation…',
       'node.detailFailed': 'Could not read details: {message}',
       'node.detailTruncated': 'Long content truncated.',
+      'node.jump': 'Go to this turn',
+      'node.afterLabel': 'Turns after',
+      'node.canvasHint': 'Drag empty space to pan · click a node for details',
+      'node.center': 'Center current',
+      'node.fit': 'Whole tree',
+      'node.selectHint': 'Click a node in the tree to see its details',
+      'node.rootDetail': 'This is where the conversation starts.',
+      'node.hoverHint': 'Click for details',
       'panel.resize': 'Drag to resize',
       'node.leafHint': 'Switch to this branch',
       'action.branch': 'Branch',
@@ -852,6 +868,503 @@ window.__ModuleLoader__.load({
     }
 
 
+    /* ---------------------------------------------------- canvas tree -- */
+
+    function contextInfo(node) {
+      const contextWindow = Number(node?.contextWindow)
+      const contextTokens = Number(node?.contextTokens)
+      const hasContext = Number.isFinite(contextWindow) && contextWindow > 0 && Number.isFinite(contextTokens) && contextTokens >= 0
+      return {
+        contextWindow,
+        contextTokens,
+        hasContext,
+        contextPct: hasContext ? Math.max(0, Math.min(100, Math.round((contextTokens / contextWindow) * 100))) : null,
+      }
+    }
+
+    /**
+     * Tidy tree, drawn horizontally with the root on the right (the same
+     * orientation as the sketch): every fork adds a column to the left, and
+     * the canvas itself can be panned without bounds.
+     */
+    function layoutTree(index, hiddenIds) {
+      const positions = new Map()
+      const edges = []
+      const hGap = 132
+      const vGap = 64
+      const padding = 56
+      let cursor = 0
+      let maxDepth = 0
+      const walk = (node, depth) => {
+        const children = (index.children.get(node.id) ?? []).filter((child) => hiddenIds.has(child.id) !== true)
+        let y
+        if (children.length === 0) {
+          y = padding + cursor * vGap
+          cursor += 1
+        } else {
+          const childYs = []
+          for (const child of children) {
+            const childPosition = walk(child, depth + 1)
+            childYs.push(childPosition.y)
+            edges.push([node.id, child.id])
+          }
+          y = childYs[0] + (childYs[childYs.length - 1] - childYs[0]) / 2
+        }
+        const x = padding + depth * hGap
+        const position = { x, y, depth }
+        positions.set(node.id, position)
+        if (depth > maxDepth) maxDepth = depth
+        return position
+      }
+      for (const root of index.roots) {
+        if (hiddenIds.has(root.id)) continue
+        walk(root, 0)
+      }
+      // Flip the columns so the root sits on the right and branches grow left.
+      for (const [id, position] of positions) {
+        positions.set(id, { ...position, x: padding + (maxDepth - position.depth) * hGap })
+      }
+      const leafCount = Math.max(1, cursor)
+      const width = padding * 2 + maxDepth * hGap
+      const height = padding * 2 + Math.max(0, leafCount - 1) * vGap
+      return { positions, edges, width: Math.max(160, width), height: Math.max(160, height) }
+    }
+
+    function TreeCanvas(props) {
+      const { index, hiddenIds, selectedId, activeId, selectedPath, afterFor, onSelect, sessionId } = props
+      const layout = useMemo(() => layoutTree(index, hiddenIds), [index, hiddenIds])
+      const wrapRef = useRef(null)
+      const [pan, setPan] = useState({ x: 0, y: 0 })
+      const [dragging, setDragging] = useState(false)
+      const [tip, setTip] = useState(null)
+      const dragRef = useRef(null)
+      const suppressClick = useRef(false)
+      const centeredSession = useRef(null)
+
+      const centerOn = (id) => {
+        const wrap = wrapRef.current
+        if (wrap === null) return
+        const rect = wrap.getBoundingClientRect()
+        if (rect.width === 0 || rect.height === 0) return
+        const position = id === null ? null : layout.positions.get(id)
+        if (position === undefined || position === null) {
+          setPan({ x: rect.width / 2 - layout.width / 2, y: rect.height / 2 - layout.height / 2 })
+        } else {
+          setPan({ x: rect.width / 2 - position.x, y: rect.height / 2 - position.y })
+        }
+      }
+
+      useEffect(() => {
+        setTip(null)
+        centeredSession.current = null
+      }, [sessionId])
+
+      useEffect(() => {
+        const wrap = wrapRef.current
+        if (wrap === null || layout.positions.size === 0) return
+        if (centeredSession.current === sessionId) return
+        centeredSession.current = sessionId
+        centerOn(selectedId ?? activeId ?? null)
+      }, [sessionId, layout, selectedId, activeId])
+
+      const isElement = (value) => typeof Element !== 'undefined' && value instanceof Element
+
+      const startDrag = (event) => {
+        if (event.button !== 0) return
+        if (isElement(event.target) && event.target.closest('.tc-canvas-node, .tc-canvas-toolbar') !== null) return
+        const wrap = wrapRef.current
+        if (wrap === null) return
+        dragRef.current = {
+          pointerId: event.pointerId,
+          startX: event.clientX,
+          startY: event.clientY,
+          panX: pan.x,
+          panY: pan.y,
+          moved: false,
+        }
+        setDragging(true)
+        setTip(null)
+        try {
+          wrap.setPointerCapture(event.pointerId)
+        } catch {
+          /* pointer capture can be unavailable in tests */
+        }
+      }
+
+      const moveDrag = (event) => {
+        const drag = dragRef.current
+        if (drag === null || drag.pointerId !== event.pointerId) return
+        const dx = event.clientX - drag.startX
+        const dy = event.clientY - drag.startY
+        if (Math.abs(dx) + Math.abs(dy) > 4) drag.moved = true
+        if (drag.moved) setPan({ x: drag.panX + dx, y: drag.panY + dy })
+      }
+
+      const endDrag = (event) => {
+        const drag = dragRef.current
+        if (drag === null || drag.pointerId !== event.pointerId) return
+        if (drag.moved) {
+          suppressClick.current = true
+          setTimeout(() => {
+            suppressClick.current = false
+          }, 0)
+        }
+        dragRef.current = null
+        setDragging(false)
+      }
+
+      const showTip = (node, element) => {
+        const wrap = wrapRef.current
+        if (wrap === null) return
+        const wrapRect = wrap.getBoundingClientRect()
+        const rect = element.getBoundingClientRect()
+        const x = Math.max(120, Math.min(Math.max(120, wrapRect.width - 120), rect.left - wrapRect.left + rect.width / 2))
+        const y = rect.top - wrapRect.top + rect.height / 2
+        setTip({ node, x, y, after: afterFor(node), below: y < 130 })
+      }
+
+      const nodes = []
+      for (const [id, position] of layout.positions) {
+        const node = index.byId.get(id)
+        if (node === undefined) continue
+        const classes = [
+          'tc-canvas-node',
+          node.kind === 'root' ? 'tc-canvas-node--root' : '',
+          node.kind === 'blank' ? 'tc-canvas-node--blank' : '',
+          id === selectedId ? 'tc-canvas-node--selected' : '',
+          id === activeId ? 'tc-canvas-node--active' : '',
+          selectedPath.has(id) ? 'tc-canvas-node--path' : '',
+          index.sessionById.get(node.sessionId)?.running === true ? 'tc-canvas-node--running' : '',
+        ].filter((value) => value !== '').join(' ')
+        const question = node.prompt || node.label || translate('node.blank')
+        nodes.push(h('button', {
+          key: id,
+          type: 'button',
+          className: classes,
+          style: { left: `${position.x}px`, top: `${position.y}px` },
+          'aria-label': node.kind === 'root' ? translate('path.root') : question,
+          onClick: (event) => {
+            event.stopPropagation()
+            if (suppressClick.current) return
+            setTip(null)
+            onSelect(node)
+          },
+          onPointerDown: (event) => event.stopPropagation(),
+          onMouseEnter: (event) => showTip(node, event.currentTarget),
+          onMouseLeave: () => setTip(null),
+        },
+          h('span', { className: 'tc-canvas-node-halo', 'aria-hidden': 'true' }),
+          h('span', { className: 'tc-canvas-node-dot' }, node.kind === 'root' ? h(Icon, { name: 'tree', size: 11 }) : null)))
+      }
+
+      const edges = layout.edges.map(([fromId, toId]) => {
+        const from = layout.positions.get(fromId)
+        const to = layout.positions.get(toId)
+        if (from === undefined || to === undefined) return null
+        const midX = (from.x + to.x) / 2
+        const d = `M ${from.x} ${from.y} C ${midX} ${from.y}, ${midX} ${to.y}, ${to.x} ${to.y}`
+        return h('path', {
+          key: `${fromId}>${toId}`,
+          d,
+          className: `tc-canvas-edge${selectedPath.has(toId) ? ' tc-canvas-edge--path' : ''}`,
+        })
+      }).filter((edge) => edge !== null)
+
+      let tipElement = null
+      if (tip !== null) {
+        const tipContext = contextInfo(tip.node)
+        const tipTurn = tip.node.kind === 'root'
+          ? translate('path.root')
+          : tip.node.kind === 'blank'
+            ? translate('node.blank')
+            : fmt(translate('node.turn'), { n: tip.node.turn })
+        tipElement = h('div', {
+          className: 'tc-canvas-tip',
+          style: {
+            left: `${tip.x}px`,
+            top: `${tip.below ? tip.y + 20 : tip.y - 14}px`,
+            transform: tip.below ? 'translate(-50%, 0)' : 'translate(-50%, -100%)',
+          },
+        },
+          h('div', { className: 'tc-tip-head' },
+            h('span', { className: 'tc-tip-turn' }, tipTurn),
+            tip.node.id === activeId ? h('span', { className: 'tc-tip-here' }, translate('node.youAreHere')) : null),
+          h('div', { className: 'tc-tip-q' }, tip.node.prompt || tip.node.label || translate('node.blank')),
+          h('div', { className: 'tc-tip-meta' },
+            tipContext.hasContext ? `${tipContext.contextPct}%` : translate('node.contextUnknown'),
+            ' · ',
+            fmt(translate('node.afterShort'), { n: tip.after.n })),
+          h('div', { className: 'tc-tip-hint' }, translate('node.hoverHint')))
+      }
+
+      return h('div', {
+        ref: wrapRef,
+        className: `tc-canvas-wrap${dragging ? ' tc-canvas-wrap--dragging' : ''}`,
+        style: { backgroundPosition: `${pan.x}px ${pan.y}px` },
+        onPointerDown: startDrag,
+        onPointerMove: moveDrag,
+        onPointerUp: endDrag,
+        onPointerCancel: endDrag,
+        onClick: () => {
+          if (!suppressClick.current) setTip(null)
+        },
+      },
+        h('div', {
+          className: 'tc-canvas-world',
+          style: {
+            width: `${layout.width}px`,
+            height: `${layout.height}px`,
+            transform: `translate3d(${pan.x}px, ${pan.y}px, 0)`,
+          },
+        },
+          h('svg', {
+            className: 'tc-canvas-edges',
+            width: layout.width,
+            height: layout.height,
+            viewBox: `0 0 ${layout.width} ${layout.height}`,
+            'aria-hidden': 'true',
+          }, edges),
+          nodes),
+        h('div', { className: 'tc-canvas-toolbar' },
+          h('button', {
+            type: 'button',
+            className: 'tc-canvas-btn',
+            title: translate('node.center'),
+            onPointerDown: (event) => event.stopPropagation(),
+            onClick: (event) => {
+              event.stopPropagation()
+              centerOn(selectedId ?? activeId ?? null)
+            },
+          }, translate('node.center')),
+          h('button', {
+            type: 'button',
+            className: 'tc-canvas-btn',
+            title: translate('node.fit'),
+            onPointerDown: (event) => event.stopPropagation(),
+            onClick: (event) => {
+              event.stopPropagation()
+              centerOn(null)
+            },
+          }, translate('node.fit'))),
+        h('div', { className: 'tc-canvas-hint' }, translate('node.canvasHint')),
+        tipElement)
+    }
+
+    function NodeDetailPane(props) {
+      const {
+        node, after, afterOnPath, isHere, isLeaf, running, archived,
+        canFork, busy, onJump, onFork, onRename, onArchive,
+      } = props
+      const [detail, setDetail] = useState(null)
+      const [loading, setLoading] = useState(false)
+      const [loadError, setLoadError] = useState(null)
+      const [renaming, setRenaming] = useState(false)
+      const [value, setValue] = useState('')
+      const inputRef = useRef(null)
+      const renamingRef = useRef(false)
+      const nodeId = node?.id ?? null
+      const endSeq = node?.endSeq ?? null
+      const cacheKey = nodeId === null ? null : `${nodeId}:${endSeq ?? ''}`
+
+      useEffect(() => {
+        renamingRef.current = false
+        setRenaming(false)
+        setValue(node?.label ?? '')
+        setDetail(null)
+        setLoadError(null)
+      }, [nodeId])
+
+      useEffect(() => {
+        if (!renaming) return undefined
+        renamingRef.current = true
+        const timer = setTimeout(() => {
+          if (inputRef.current !== null) {
+            inputRef.current.focus()
+            inputRef.current.select()
+          }
+        }, 0)
+        return () => clearTimeout(timer)
+      }, [renaming])
+
+      useEffect(() => {
+        setLoadError(null)
+        if (node === null || node.kind === 'root' || cacheKey === null) {
+          setLoading(false)
+          return undefined
+        }
+        const cached = detailCache.get(cacheKey)
+        if (cached !== undefined && Date.now() - cached.at < DETAIL_CACHE_MS) {
+          setDetail(cached.detail)
+          setLoading(false)
+          return undefined
+        }
+        let cancelled = false
+        setLoading(true)
+        fetchDetail(node.id).then((next) => {
+          if (cancelled) return
+          detailCache.set(cacheKey, { at: Date.now(), detail: next })
+          setDetail(next)
+        }).catch((error) => {
+          if (!cancelled) setLoadError(noticeText(error))
+        }).finally(() => {
+          if (!cancelled) setLoading(false)
+        })
+        return () => {
+          cancelled = true
+        }
+      }, [nodeId, endSeq, node?.kind, cacheKey])
+
+      const submitRename = () => {
+        if (node === null || !renamingRef.current) return
+        renamingRef.current = false
+        setRenaming(false)
+        const next = value.trim()
+        if (next !== '' && next !== node.label) onRename(node, next)
+      }
+
+      const startRename = () => {
+        if (node === null) return
+        renamingRef.current = true
+        setRenaming(true)
+        setValue(node.label ?? '')
+      }
+
+      const cancelRename = () => {
+        renamingRef.current = false
+        setRenaming(false)
+        setValue(node?.label ?? '')
+      }
+
+      if (node === null) {
+        return h('aside', { className: 'tc-side', 'aria-label': translate('node.selectHint') },
+          h('div', { className: 'tc-side-empty' }, translate('node.selectHint')))
+      }
+
+      const context = contextInfo(node)
+      const question = detail?.prompt ?? node.prompt ?? ''
+      const answer = detail?.answer ?? node.answer ?? ''
+      const answerText = answer !== ''
+        ? answer
+        : loading === true
+          ? translate('node.detailLoading')
+          : node.open === true
+            ? translate('node.detailWaiting')
+            : translate('node.answerEmpty')
+      const title = node.kind === 'root'
+        ? translate('path.root')
+        : node.kind === 'blank'
+          ? translate('node.blank')
+          : fmt(translate('node.turn'), { n: node.turn })
+      const afterTitle = after === 0
+        ? translate('node.afterZero')
+        : fmt(translate(afterOnPath ? 'node.afterPathTitle' : 'node.afterBranchTitle'), { n: after })
+      const contextTitle = context.hasContext
+        ? fmt(translate('node.contextTitle'), {
+            used: formatNumber(context.contextTokens),
+            window: formatNumber(context.contextWindow),
+            pct: context.contextPct,
+          })
+        : translate('node.contextUnknown')
+      const barClass = `tc-side-ctx-bar${context.contextPct !== null && context.contextPct >= 90 ? ' tc-side-ctx-bar--error' : context.contextPct !== null && context.contextPct >= 70 ? ' tc-side-ctx-bar--warn' : ''}`
+
+      const badges = []
+      if (isHere) badges.push(h('span', { key: 'here', className: 'tc-side-badge tc-side-badge--here' }, translate('node.youAreHere')))
+      if (running) badges.push(h('span', { key: 'running', className: 'tc-side-badge tc-side-badge--running' }, translate('node.running')))
+      else if (node.open === true) badges.push(h('span', { key: 'open', className: 'tc-side-badge' }, translate('node.open')))
+      if (archived) badges.push(h('span', { key: 'archived', className: 'tc-side-badge' }, translate('node.archive')))
+
+      const actions = []
+      if (node.kind === 'turn') {
+        actions.push(h('button', {
+          key: 'jump',
+          type: 'button',
+          className: 'tc-side-act',
+          title: translate('node.jumpHint'),
+          disabled: busy,
+          onClick: () => onJump(node),
+        }, h(Icon, { name: 'right', size: 13 }), translate('node.jump')))
+        actions.push(h('button', {
+          key: 'fork',
+          type: 'button',
+          className: 'tc-side-act tc-side-act--primary',
+          title: translate('action.branchHint'),
+          disabled: busy || running || canFork !== true,
+          onClick: () => onFork(node),
+        }, h(Icon, { name: 'plus', size: 13 }), translate('action.branch')))
+      }
+      actions.push(h('button', {
+        key: 'rename',
+        type: 'button',
+        className: 'tc-side-act',
+        disabled: busy,
+        onClick: startRename,
+      }, h(Icon, { name: 'pencil', size: 13 }), translate('node.rename')))
+      if (node.kind !== 'root') {
+        actions.push(h('button', {
+          key: 'archive',
+          type: 'button',
+          className: 'tc-side-act',
+          title: translate('node.archiveHint'),
+          disabled: busy || running,
+          onClick: () => onArchive(node.sessionId),
+        }, h(Icon, { name: 'archive', size: 13 }), translate('node.archive')))
+      }
+
+      return h('aside', { className: 'tc-side', 'aria-label': title },
+        h('div', { className: 'tc-side-head' },
+          h('div', { className: 'tc-side-title-row' },
+            renaming
+              ? h('input', {
+                  ref: inputRef,
+                  className: 'tc-side-rename',
+                  value,
+                  placeholder: translate('node.renamePlaceholder'),
+                  onChange: (event) => setValue(event.target.value),
+                  onKeyDown: (event) => {
+                    if (event.key === 'Enter') {
+                      event.preventDefault()
+                      event.stopPropagation()
+                      submitRename()
+                    } else if (event.key === 'Escape') {
+                      event.preventDefault()
+                      event.stopPropagation()
+                      cancelRename()
+                    }
+                  },
+                  onBlur: submitRename,
+                })
+              : h('div', { className: 'tc-side-title', title }, title)),
+          isLeaf && node.label !== '' && node.label !== title
+            ? h('div', { className: 'tc-side-sub' }, node.label)
+            : null,
+          badges.length > 0 ? h('div', { className: 'tc-side-badges' }, badges) : null),
+        h('div', { className: 'tc-side-body' },
+          h('div', { className: 'tc-side-stats' },
+            h('div', { className: 'tc-side-stat' },
+              h('div', { className: 'tc-side-stat-label' }, translate('node.contextLabel')),
+              h('div', { className: 'tc-side-stat-value' }, context.hasContext ? `${context.contextPct}%` : '—'),
+              h('div', { className: barClass }, context.hasContext ? h('span', { style: { width: `${context.contextPct}%` } }) : null),
+              h('div', { className: 'tc-side-stat-note', title: contextTitle },
+                context.hasContext
+                  ? `${formatNumber(context.contextTokens)} / ${formatNumber(context.contextWindow)}`
+                  : translate('node.contextUnknown'))),
+            h('div', { className: 'tc-side-stat' },
+              h('div', { className: 'tc-side-stat-label' }, translate('node.afterLabel')),
+              h('div', { className: 'tc-side-stat-value' }, `+${after}`),
+              h('div', { className: 'tc-side-stat-note', title: afterTitle }, afterTitle))),
+          node.kind === 'root'
+            ? h('div', { className: 'tc-side-empty' }, translate('node.rootDetail'))
+            : h('div', { className: 'tc-chat' },
+                loadError !== null ? h('div', { className: 'tc-side-error' }, fmt(translate('node.detailFailed'), { message: loadError })) : null,
+                h('div', { className: 'tc-chat-label' }, translate('node.questionLabel')),
+                h('div', { className: 'tc-chat-bubble tc-chat-bubble--user' }, question !== '' ? question : translate('node.waiting')),
+                h('div', { className: 'tc-chat-label' }, translate('node.answerLabel')),
+                h('div', { className: `tc-chat-bubble tc-chat-bubble--assistant${loading ? ' tc-chat-bubble--loading' : ''}` }, answerText),
+                detail?.truncated === true ? h('div', { className: 'tc-side-note' }, translate('node.detailTruncated')) : null,
+                detail?.time ? h('div', { className: 'tc-side-note' }, formatTime(detail.time)) : null)),
+        actions.length > 0 ? h('div', { className: 'tc-side-actions' }, actions) : null)
+    }
+
     /* ---------------------------------------------------------- panel -- */
 
     function TreePanel(props) {
@@ -1266,6 +1779,15 @@ window.__ModuleLoader__.load({
       const turns = visibleNodes.filter((node) => node.kind === 'turn').length
       const branches = data.sessions.filter((session) => !archivedIds.has(session.id)).length
       const allArchived = data.sessions.length > 0 && branches === 0
+      const selectedNode = effectiveSelectedId !== null && index !== null
+        ? (index.byId.get(effectiveSelectedId) ?? null)
+        : null
+      const paneNode = selectedNode === null ? null : { ...selectedNode, label: labelOf(selectedNode) }
+      const paneAfter = selectedNode === null ? { n: 0, onPath: false } : afterFor(selectedNode)
+      const paneIsHere = selectedNode !== null && activeLeafId === selectedNode.id
+      const paneIsLeaf = selectedNode !== null && index.leaves.get(selectedNode.sessionId)?.id === selectedNode.id
+      const paneRunning = selectedNode !== null && index.sessionById.get(selectedNode.sessionId)?.running === true
+      const paneArchived = selectedNode !== null && archivedIds.has(selectedNode.sessionId)
       return h('div', { className: `tc-panel tc-panel--${variant}`, 'aria-busy': busy || refreshing },
         h('div', { className: 'tc-head' },
           h('div', { className: 'tc-head-text' },
@@ -1279,16 +1801,40 @@ window.__ModuleLoader__.load({
             disabled: refreshing,
             spinning: refreshing,
           })),
-        h('div', { className: 'tc-hint' }, translate('panel.hint')),
         busy ? h('div', { className: 'tc-notice tc-notice--busy' }, translate('action.busy')) : null,
         notice === null ? null : h('div', { className: 'tc-notice' }, notice),
         error === null ? null : h('div', { className: 'tc-notice' }, `${translate('panel.error')}：${error}`),
         data.errors !== undefined && data.errors.length > 0 ? h('div', { className: 'tc-warn' }, translate('panel.partial')) : null,
         toast === null ? null : h('div', { className: 'tc-toast', role: 'status' }, toast),
-        h('div', { className: 'tc-body', role: 'tree', 'aria-label': translate('panel.title') },
-          visibleNodes.length <= 1
+        h('div', { className: 'tc-body', 'aria-label': translate('panel.title') },
+          visibleNodes.length === 0
             ? h('div', { className: 'tc-empty' }, allArchived ? translate('panel.allArchived') : translate('panel.empty'))
-            : index.roots.map((node) => renderBranch(node, 0))))
+            : h('div', { className: 'tc-workspace' },
+                h(TreeCanvas, {
+                  index,
+                  hiddenIds,
+                  selectedId: effectiveSelectedId,
+                  activeId: activeLeafId,
+                  selectedPath,
+                  afterFor,
+                  onSelect: (node) => setSelectedId(node.id),
+                  sessionId,
+                }),
+                h(NodeDetailPane, {
+                  node: paneNode,
+                  after: paneAfter.n,
+                  afterOnPath: paneAfter.onPath,
+                  isHere: paneIsHere,
+                  isLeaf: paneIsLeaf,
+                  running: paneRunning,
+                  archived: paneArchived,
+                  canFork,
+                  busy,
+                  onJump: activate,
+                  onFork: forkFromNode,
+                  onRename: rename,
+                  onArchive: archiveBranch,
+                }))))
     }
 
     function ViewTree(props) {
@@ -1304,9 +1850,9 @@ window.__ModuleLoader__.load({
     function readOverlayWidth() {
       try {
         const value = Number(localStorage.getItem(WIDTH_KEY))
-        return Number.isFinite(value) && value >= 280 ? Math.min(value, 760) : 420
+        return Number.isFinite(value) && value > 0 ? Math.min(Math.max(value, 560), 1100) : 820
       } catch {
-        return 420
+        return 820
       }
     }
 
@@ -1346,8 +1892,8 @@ window.__ModuleLoader__.load({
         event.preventDefault()
         event.stopPropagation()
         const onMove = (moveEvent) => {
-          const max = Math.max(320, Math.min(760, window.innerWidth - 80))
-          const next = Math.min(Math.max(280, window.innerWidth - moveEvent.clientX), max)
+          const max = Math.max(320, Math.min(1100, window.innerWidth - 80))
+          const next = Math.min(max, Math.max(560, window.innerWidth - moveEvent.clientX))
           setWidth(next)
         }
         const onUp = () => {
@@ -1433,8 +1979,8 @@ window.__ModuleLoader__.load({
 .tc-sub{color:var(--dsw-alias-label-tertiary);font-size:11px;margin-top:1px}
 .tc-spacer{flex:1}
 .tc-hint{padding:7px 12px 0;color:var(--dsw-alias-label-tertiary);font-size:11px}
-.tc-body{flex:1;min-height:0;overflow:auto;padding:8px 8px 18px}
-.tc-panel--view .tc-body{max-width:760px;width:100%;margin:0 auto;padding:14px 20px 32px;box-sizing:border-box}
+.tc-body{flex:1;min-height:0;overflow:hidden;padding:0}
+.tc-panel--view .tc-body{max-width:none;width:100%;margin:0;padding:0;box-sizing:border-box}
 .tc-empty{padding:18px 12px;color:var(--dsw-alias-label-tertiary);font-size:12px}
 .tc-notice{margin:8px 12px 0;padding:6px 8px;border-radius:6px;background:var(--dsw-alias-bg-layer-2);border:1px solid var(--dsw-alias-state-warn-primary);color:var(--dsw-alias-label-primary);font-size:11px}
 .tc-notice--busy{border-color:var(--dsw-alias-border-l2);color:var(--dsw-alias-label-secondary)}
@@ -1552,6 +2098,79 @@ window.__ModuleLoader__.load({
 @keyframes tc-toast-in{from{opacity:0;transform:translate(-50%,-4px)}to{opacity:1;transform:translate(-50%,0)}}
 .tc-open-btn{display:inline-flex;align-items:center;gap:5px;height:28px;padding:0 8px;border:1px solid var(--dsw-alias-border-l1);border-radius:6px;background:transparent;color:var(--dsw-alias-label-secondary);font:inherit;font-size:12px;cursor:pointer}
 .tc-open-btn:hover{background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-primary)}
+/* --------------------------------------------------- canvas workspace -- */
+.tc-workspace{display:flex;height:100%;min-height:0;width:100%}
+.tc-canvas-wrap{position:relative;flex:1 1 auto;min-width:0;min-height:0;height:100%;overflow:hidden;background-color:var(--dsw-alias-bg-base);background-image:radial-gradient(circle,var(--dsw-alias-border-l1) 1px,transparent 1px);background-size:18px 18px;cursor:grab;touch-action:none;user-select:none}
+.tc-canvas-wrap--dragging{cursor:grabbing}
+.tc-canvas-world{position:absolute;left:0;top:0;transform-origin:0 0;will-change:transform}
+.tc-canvas-edges{position:absolute;left:0;top:0;overflow:visible;pointer-events:none}
+.tc-canvas-edge{fill:none;stroke:var(--dsw-alias-border-l2);stroke-width:1.4;stroke-linecap:round}
+.tc-canvas-edge--path{stroke:var(--dsw-alias-state-business-primary);stroke-width:2;opacity:.8}
+.tc-canvas-node{position:absolute;transform:translate(-50%,-50%);display:flex;align-items:center;justify-content:center;width:30px;height:30px;padding:0;border:0;border-radius:50%;background:transparent;color:var(--dsw-alias-label-tertiary);cursor:pointer;outline:none}
+.tc-canvas-node-halo{position:absolute;inset:2px;border-radius:50%;background:transparent;transition:background-color .12s,box-shadow .12s}
+.tc-canvas-node-dot{position:relative;display:flex;align-items:center;justify-content:center;width:12px;height:12px;border-radius:50%;border:1.5px solid var(--dsw-alias-border-l2);background:var(--dsw-alias-bg-base);color:var(--dsw-alias-label-tertiary);transition:background-color .12s,border-color .12s,transform .12s}
+.tc-canvas-node:hover .tc-canvas-node-halo{background:color-mix(in srgb,var(--dsw-alias-state-business-primary) 12%,transparent)}
+.tc-canvas-node:hover .tc-canvas-node-dot{transform:scale(1.12)}
+.tc-canvas-node:focus-visible .tc-canvas-node-halo{box-shadow:0 0 0 2px var(--dsw-alias-state-business-primary)}
+.tc-canvas-node--root .tc-canvas-node-dot{width:22px;height:22px;border-color:var(--dsw-alias-state-business-primary);background:color-mix(in srgb,var(--dsw-alias-state-business-primary) 10%,var(--dsw-alias-bg-base));color:var(--dsw-alias-state-business-primary)}
+.tc-canvas-node--blank .tc-canvas-node-dot{border-style:dashed;background:transparent}
+.tc-canvas-node--path .tc-canvas-node-dot{border-color:var(--dsw-alias-state-business-primary);background:color-mix(in srgb,var(--dsw-alias-state-business-primary) 12%,var(--dsw-alias-bg-base))}
+.tc-canvas-node--selected .tc-canvas-node-halo{background:color-mix(in srgb,var(--dsw-alias-state-business-primary) 16%,transparent);box-shadow:0 0 0 3px color-mix(in srgb,var(--dsw-alias-state-business-primary) 18%,transparent)}
+.tc-canvas-node--selected .tc-canvas-node-dot{border-color:var(--dsw-alias-state-business-primary);background:var(--dsw-alias-state-business-primary);color:var(--dsw-alias-bg-base)}
+.tc-canvas-node--active .tc-canvas-node-halo{background:color-mix(in srgb,var(--dsw-alias-state-success-primary) 18%,transparent);box-shadow:0 0 0 3px color-mix(in srgb,var(--dsw-alias-state-success-primary) 20%,transparent)}
+.tc-canvas-node--active .tc-canvas-node-dot{border-color:var(--dsw-alias-state-success-primary);background:var(--dsw-alias-state-success-primary);color:var(--dsw-alias-bg-base)}
+.tc-canvas-node--running .tc-canvas-node-dot{animation:tc-node-pulse 1.6s ease-in-out infinite}
+@keyframes tc-node-pulse{0%,100%{box-shadow:0 0 0 0 color-mix(in srgb,var(--dsw-alias-state-success-primary) 0%,transparent)}50%{box-shadow:0 0 0 6px color-mix(in srgb,var(--dsw-alias-state-success-primary) 18%,transparent)}}
+.tc-canvas-toolbar{position:absolute;left:12px;top:10px;z-index:6;display:flex;gap:6px}
+.tc-canvas-btn{height:24px;padding:0 8px;border:1px solid var(--dsw-alias-border-l1);border-radius:6px;background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-secondary);font:inherit;font-size:11px;cursor:pointer;white-space:nowrap}
+.tc-canvas-btn:hover{background:var(--dsw-alias-bg-layer-2);border-color:var(--dsw-alias-border-l2);color:var(--dsw-alias-label-primary)}
+.tc-canvas-hint{position:absolute;left:12px;bottom:10px;right:12px;z-index:5;color:var(--dsw-alias-label-tertiary);font-size:10px;pointer-events:none;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.tc-canvas-tip{position:absolute;z-index:30;width:260px;max-width:calc(100% - 24px);box-sizing:border-box;padding:9px 10px;border:1px solid var(--dsw-alias-border-l2);border-radius:8px;background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-primary);box-shadow:var(--dsw-elevation-panel,0 10px 28px rgba(0,0,0,.22));pointer-events:none;font-size:11px;line-height:1.45}
+.tc-tip-head{display:flex;align-items:center;gap:6px;min-width:0}
+.tc-tip-turn{font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.tc-tip-here{margin-left:auto;padding:0 4px;border:1px solid var(--dsw-alias-state-success-primary);border-radius:4px;color:var(--dsw-alias-state-success-primary);font-size:10px;line-height:15px;white-space:nowrap}
+.tc-tip-q{margin-top:4px;color:var(--dsw-alias-label-secondary);font-size:11px;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden;word-break:break-word}
+.tc-tip-meta{margin-top:5px;color:var(--dsw-alias-label-tertiary);font-size:10px;font-variant-numeric:tabular-nums}
+.tc-tip-hint{margin-top:3px;color:var(--dsw-alias-label-tertiary);font-size:10px}
+.tc-side{flex:0 0 360px;width:360px;min-width:0;height:100%;min-height:0;display:flex;flex-direction:column;border-left:1px solid var(--dsw-alias-border-l1);background:var(--dsw-alias-bg-base)}
+.tc-panel--view .tc-side{flex-basis:380px;width:380px}
+.tc-side-head{padding:14px 16px 10px;border-bottom:1px solid var(--dsw-alias-border-l1);flex-shrink:0}
+.tc-side-title-row{display:flex;align-items:center;gap:8px;min-width:0}
+.tc-side-title{flex:1;min-width:0;font-weight:600;font-size:14px;line-height:1.35;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.tc-side-sub{margin-top:3px;color:var(--dsw-alias-label-tertiary);font-size:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.tc-side-badges{display:flex;flex-wrap:wrap;gap:4px;margin-top:5px}
+.tc-side-badge{padding:0 4px;border:1px solid var(--dsw-alias-border-l1);border-radius:4px;color:var(--dsw-alias-label-tertiary);font-size:10px;line-height:15px;white-space:nowrap}
+.tc-side-badge--here{border-color:var(--dsw-alias-state-success-primary);color:var(--dsw-alias-state-success-primary);font-weight:600}
+.tc-side-badge--running{border-color:var(--dsw-alias-state-success-primary);color:var(--dsw-alias-state-success-primary)}
+.tc-side-body{flex:1 1 auto;min-height:0;overflow:auto;padding:12px 16px 18px;display:flex;flex-direction:column;gap:12px;overscroll-behavior:contain}
+.tc-side-empty{padding:18px 0;color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:1.6}
+.tc-side-stats{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:8px}
+.tc-side-stat{min-width:0;padding:8px 10px;border:1px solid var(--dsw-alias-border-l1);border-radius:8px;background:var(--dsw-alias-bg-layer-1)}
+.tc-side-stat-label{color:var(--dsw-alias-label-tertiary);font-size:10px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.tc-side-stat-value{margin-top:2px;font-size:18px;font-weight:600;line-height:1.2;font-variant-numeric:tabular-nums;color:var(--dsw-alias-label-primary)}
+.tc-side-stat-note{margin-top:3px;color:var(--dsw-alias-label-tertiary);font-size:10px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-variant-numeric:tabular-nums}
+.tc-side-ctx-bar{height:4px;margin-top:5px;border-radius:2px;background:var(--dsw-alias-border-l1);overflow:hidden}
+.tc-side-ctx-bar > span{display:block;height:100%;border-radius:2px;background:var(--dsw-alias-state-business-primary,#4d6bfe);transition:width .2s}
+.tc-side-ctx-bar--warn > span{background:var(--dsw-alias-state-warn-primary,#d97706)}
+.tc-side-ctx-bar--error > span{background:var(--dsw-alias-state-error-primary,#dc2626)}
+.tc-chat{display:flex;flex-direction:column;gap:6px;min-width:0}
+.tc-chat-label{margin-top:2px;color:var(--dsw-alias-label-secondary);font-size:10px;font-weight:600;letter-spacing:.02em}
+.tc-chat-bubble{padding:8px 10px;border:1px solid var(--dsw-alias-border-l1);border-radius:8px;background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-primary);font-size:12px;line-height:1.55;white-space:pre-wrap;word-break:break-word;overflow-wrap:anywhere}
+.tc-chat-bubble--user{border-color:color-mix(in srgb,var(--dsw-alias-state-business-primary) 34%,var(--dsw-alias-border-l1));background:color-mix(in srgb,var(--dsw-alias-state-business-primary) 6%,var(--dsw-alias-bg-layer-1))}
+.tc-chat-bubble--assistant{background:var(--dsw-alias-bg-layer-1)}
+.tc-chat-bubble--loading{color:var(--dsw-alias-label-tertiary);font-style:italic}
+.tc-side-note{color:var(--dsw-alias-label-tertiary);font-size:10px;line-height:1.45}
+.tc-side-error{padding:6px 8px;border:1px solid var(--dsw-alias-state-error-primary);border-radius:6px;color:var(--dsw-alias-state-error-primary);font-size:11px;line-height:1.45}
+.tc-side-actions{display:flex;flex-wrap:wrap;gap:6px;padding:10px 16px;border-top:1px solid var(--dsw-alias-border-l1);flex-shrink:0}
+.tc-side-act{display:inline-flex;align-items:center;gap:4px;height:26px;padding:0 8px;border:1px solid var(--dsw-alias-border-l1);border-radius:6px;background:transparent;color:var(--dsw-alias-label-secondary);font:inherit;font-size:11px;cursor:pointer;white-space:nowrap}
+.tc-side-act:hover:not(:disabled){background:var(--dsw-alias-bg-layer-2);border-color:var(--dsw-alias-border-l2);color:var(--dsw-alias-label-primary)}
+.tc-side-act:disabled{opacity:.45;cursor:not-allowed}
+.tc-side-act--primary{border-color:var(--dsw-alias-state-business-primary);color:var(--dsw-alias-state-business-primary)}
+.tc-side-act--primary:hover:not(:disabled){border-color:var(--dsw-alias-state-business-primary);color:var(--dsw-alias-state-business-primary);background:color-mix(in srgb,var(--dsw-alias-state-business-primary) 8%,transparent)}
+.tc-side-rename{width:100%;box-sizing:border-box;height:28px;padding:0 6px;border:1px solid var(--dsw-alias-state-business-primary);border-radius:6px;background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-primary);font:inherit;font-size:13px;outline:none}
+@media (max-width:980px){.tc-side,.tc-panel--view .tc-side{flex-basis:320px;width:320px}}
+@media (max-width:760px){.tc-workspace{flex-direction:column}.tc-canvas-wrap{flex:1 1 auto;min-height:220px}.tc-side,.tc-panel--view .tc-side{flex:0 0 45%;width:100%;border-left:0;border-top:1px solid var(--dsw-alias-border-l1)}}
+
 `
 
     /* ----------------------------------------------------------- apply -- */
