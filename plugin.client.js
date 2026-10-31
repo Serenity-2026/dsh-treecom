@@ -2564,13 +2564,15 @@ window.__ModuleLoader__.load({
 .tc-branch-action:disabled{opacity:.45;cursor:not-allowed}
 .tc-action-error{margin-left:2px;color:var(--dsw-alias-state-error-primary);font-weight:700;cursor:help}
 body.tc-view-tree-open [data-composer-seat],body.tc-view-tree-open [data-conversation-region="composer"],body.tc-view-tree-open [data-composer-card],body.tc-view-tree-open [data-composer-input],body.tc-view-tree-open [data-composer-dock],body.tc-view-tree-open [data-composer-overlay],body.tc-view-tree-open [data-conversation-composer-overlay],body.tc-view-tree-open [contenteditable="true"],body.tc-view-tree-open textarea{display:none!important}
+body.tc-view-tree-open [data-width-handle]{pointer-events:none!important;cursor:default!important}
+body.tc-view-tree-open [data-width-handle]::after{display:none!important}
 .tc-sidebar-body{height:100%;min-height:0;display:flex;flex-direction:column;overflow:hidden}
 .tc-sidebar-body .tc-panel{flex:1;min-height:0}
 .tc-sidebar-body .tc-workspace{flex-direction:column}
 .tc-sidebar-body .tc-canvas-wrap{flex:1 1 auto;min-height:240px}
 .tc-sidebar-body .tc-side{flex:0 0 46%;width:100%;max-width:none;max-height:52%;border-left:0;border-top:1px solid var(--dsw-alias-border-l1)}
-.tc-sidebar-body .tc-chat-bubble,.tc-sidebar-body .tc-chat-bubble--user{height:92px}
-.tc-sidebar-body .tc-chat-bubble--assistant{height:168px}
+.tc-sidebar-body .tc-chat-bubble,.tc-sidebar-body .tc-chat-bubble--user{max-height:92px}
+.tc-sidebar-body .tc-chat-bubble--assistant{max-height:168px}
 .tc-toast{position:absolute;top:46px;left:50%;transform:translateX(-50%);z-index:5;padding:5px 10px;border-radius:999px;background:var(--dsw-alias-bg-layer-3);border:1px solid var(--dsw-alias-border-l2);color:var(--dsw-alias-label-primary);box-shadow:var(--dsw-elevation-panel);font-size:11px;white-space:nowrap;pointer-events:none;animation:tc-toast-in .15s ease-out}
 @keyframes tc-toast-in{from{opacity:0;transform:translate(-50%,-4px)}to{opacity:1;transform:translate(-50%,0)}}
 .tc-open-btn{display:inline-flex;align-items:center;gap:5px;height:28px;padding:0 8px;border:1px solid var(--dsw-alias-border-l1);border-radius:6px;background:transparent;color:var(--dsw-alias-label-secondary);font:inherit;font-size:12px;cursor:pointer}
@@ -2679,12 +2681,12 @@ body.tc-view-tree-open [data-composer-seat],body.tc-view-tree-open [data-convers
 .tc-copy-btn:hover:not(:disabled){color:var(--dsw-alias-state-business-primary);border-color:var(--dsw-alias-border-l2);background:var(--dsw-alias-bg-layer-2);opacity:1}
 .tc-copy-btn:disabled{opacity:.35;cursor:default}
 .tc-copy-btn--done{color:var(--dsw-alias-state-success-primary);border-color:var(--dsw-alias-state-success-primary);opacity:1}
-.tc-chat-bubble{height:116px;flex:0 0 auto;overflow-y:auto;overflow-x:hidden;overscroll-behavior:contain;scrollbar-width:thin;padding:8px 10px;border:1px solid var(--dsw-alias-border-l1);border-radius:8px;background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-primary);font-size:12px;line-height:1.55;white-space:pre-wrap;word-break:break-word;overflow-wrap:anywhere}
-.tc-chat-bubble--user{height:116px}
+.tc-chat-bubble{max-height:220px;flex:0 0 auto;overflow-y:auto;overflow-x:hidden;overscroll-behavior:contain;scrollbar-width:thin;padding:8px 10px;border:1px solid var(--dsw-alias-border-l1);border-radius:8px;background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-primary);font-size:12px;line-height:1.55;white-space:pre-wrap;word-break:break-word;overflow-wrap:anywhere}
+.tc-chat-bubble--user{max-height:116px}
 .tc-chat-bubble::-webkit-scrollbar{width:6px}
 .tc-chat-bubble::-webkit-scrollbar-thumb{background:var(--dsw-alias-border-l2);border-radius:3px}
 .tc-chat-bubble--user{border-color:color-mix(in srgb,var(--dsw-alias-state-business-primary) 34%,var(--dsw-alias-border-l1));background:color-mix(in srgb,var(--dsw-alias-state-business-primary) 6%,var(--dsw-alias-bg-layer-1))}
-.tc-chat-bubble--assistant{height:220px;background:var(--dsw-alias-bg-layer-1)}
+.tc-chat-bubble--assistant{max-height:220px;background:var(--dsw-alias-bg-layer-1)}
 .tc-chat-bubble--loading{color:var(--dsw-alias-label-tertiary);font-style:italic}
 .tc-side-note{color:var(--dsw-alias-label-tertiary);font-size:10px;line-height:1.45}
 .tc-side-error{padding:6px 8px;border:1px solid var(--dsw-alias-state-error-primary);border-radius:6px;color:var(--dsw-alias-state-error-primary);font-size:11px;line-height:1.45}

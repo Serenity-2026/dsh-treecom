@@ -2,8 +2,9 @@
 
 ## Unreleased
 
-- The question and answer bubbles in the right detail pane now have fixed heights and scroll internally when the content is longer.
+- The question and answer bubbles in the right detail pane now use max-heights: they shrink to the content and scroll internally only when the content exceeds the limit.
 - Hover preview uses the normal arrow over its frame and an I-beam over text, so text selection/copy is discoverable without dragging first.
+- Disabled the host conversation width-resize handles while the Conversation "对话树" tab is active, so the tree page no longer shows a col-resize cursor.
 - The chain collapse control now collapses only the turns above the hovered node ("折叠上方 N 轮") instead of the whole chain.
 - Chain nodes can be collapsed again: after expanding a linear stretch, hover any node in the chain and click “折叠 N 轮” in the preview.
 - Hover preview now uses a default arrow cursor, supports text selection (I-beam while dragging), and its bottom “点击查看详情” hint is clickable like the node itself.
