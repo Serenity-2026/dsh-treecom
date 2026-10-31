@@ -2,20 +2,18 @@
 
 ## Unreleased
 
-- Opening the header overlay now hides only the composer while the conversation stays visible; the overlay slides in from the right at 820px by default and can be dragged between 560px and 1100px. A bottom button temporarily brings the composer back, and dragging the left edge past the narrow threshold closes the panel.
+- Replaced the floating overlay with the host right sidebar: the header "对话树" button now opens a `sidebar.right.pane.tab` tab, the conversation stays visible, and the host sidebar owns close/resize. Removed the overlay registration, overlay state, and overlay CSS entirely; the remaining entries are the Conversation "对话树" view tab and the header button.
 - Tree data is cached per session and refreshed only when the live session revision changes (new turns, session switches/additions, title/running/blank changes); the 8-second polling loop is gone, a running session refreshes at a low 5-second cadence, and the refresh button forces a reload.
 - Linear stretches with no branch collapse into one representative node with a turn count; clicking it expands the whole chain.
 - Rename/archive/fork actions moved from the bottom of the detail pane into its header, so they are always visible.
 - Canvas now grows vertically from the top (root at top, branches below); the initial view focuses the root, and "Go to this turn" centers the active leaf.
 - Scroll wheel / trackpad zooms the canvas around the pointer (0.3x–3x), with pan preserved.
 - Renamed the Conversation view tab from "Tree" to "对话树 / Conversation tree" to match the header entry.
-- Replaced the list tree with a pannable canvas: circular nodes and curved edges, root on the right, branches growing left; drag empty space to pan without bounds.
+- Replaced the list tree with a pannable canvas: circular nodes and curved edges, root at the top with branches growing down; drag empty space to pan without bounds.
 - Clicking a node now selects it and opens a right-side detail pane instead of switching branches; a "Go to this turn" action performs the switch and jump.
 - Right pane shows context-window usage (percentage, bar, exact tokens), turns following the node, a scrollable full question/answer preview, and archive/rename/fork actions.
 - Hovering a node shows an interactive preview with the turn, full question and answer, context usage, and turns after; the preview stays open when the pointer moves into it and scrolls internally with the wheel.
 - Question and answer text in the right pane and the hover preview now renders Markdown (headings, lists, fenced code, tables, links, emphasis).
-- The Conversation "对话树" view tab now hides the composer as well; switching back to "对话" restores it. Clicking elsewhere in the conversation retracts the header overlay, while interacting with the revealed composer keeps it open.
-- Removed the old list cards, per-card status column, and collapse controls; the header overlay now stays a side panel and can be resized between 560px and 1100px.
 - Host `/treecom` serves per-turn context usage and an on-demand `detail` action for full conversation text.
 
 ## 0.1.0 — 2026-10-31

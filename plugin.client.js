@@ -26,7 +26,6 @@ window.__ModuleLoader__.load({
     const ROUTE = '/treecom'
     const NS = 'treecom'
     const VIEW_ID = 'treecom'
-    const WIDTH_KEY = 'treecom:width:v3'
     const DETAIL_CACHE_MS = 10_000
 
     /* --------------------------------------------------------- locale -- */
@@ -41,7 +40,6 @@ window.__ModuleLoader__.load({
       'panel.refreshed': '刷新成功',
       'panel.refreshFailed': '刷新失败：{message}',
       'panel.allArchived': '已归档的分支不显示在树里；在左侧取消归档即可恢复。',
-      'panel.close': '关闭',
       'panel.turns': '{n} 轮',
       'panel.branches': '{n} 条分支',
       'panel.partial': '有分支暂时读不到',
@@ -86,9 +84,6 @@ window.__ModuleLoader__.load({
       'node.hoverHint': '点击查看详情',
       'node.chainHint': '连续 {n} 轮 · 点击展开',
       'node.chainAria': '连续 {n} 轮，点击展开',
-      'panel.resize': '拖动调整宽度，向左拖窄可关闭',
-      'overlay.showComposer': '显示输入框',
-      'overlay.hideComposer': '隐藏输入框',
       'node.leafHint': '切到这条分支',
       'action.branch': '分叉',
       'action.branchHint': '从这一轮分叉，开一条新的对话分支',
@@ -118,7 +113,6 @@ window.__ModuleLoader__.load({
       'panel.refreshed': 'Refreshed',
       'panel.refreshFailed': 'Refresh failed: {message}',
       'panel.allArchived': 'Archived branches are hidden from the tree; unarchive one in the sidebar to bring it back.',
-      'panel.close': 'Close',
       'panel.turns': '{n} turns',
       'panel.branches': '{n} branches',
       'panel.partial': 'Some branches could not be read',
@@ -163,9 +157,6 @@ window.__ModuleLoader__.load({
       'node.hoverHint': 'Click for details',
       'node.chainHint': '{n} turns · click to expand',
       'node.chainAria': '{n} consecutive turns; click to expand',
-      'panel.resize': 'Drag to resize; drag narrow to close',
-      'overlay.showComposer': 'Show input',
-      'overlay.hideComposer': 'Hide input',
       'node.leafHint': 'Switch to this branch',
       'action.branch': 'Branch',
       'action.branchHint': 'Branch from this turn into a new conversation branch',
@@ -440,7 +431,7 @@ window.__ModuleLoader__.load({
 
     /* -------------------------------------------------------- actions -- */
 
-    const pending = { panelSession: null, focusSession: null }
+    const pending = { focusSession: null }
     let selectionIntent = null
     const EMPTY_ARCHIVED = Object.freeze([])
     const selectArchived = (snapshot) => (
@@ -451,61 +442,6 @@ window.__ModuleLoader__.load({
     const selectSessionById = (snapshot) => (
       snapshot !== undefined && snapshot !== null && snapshot.byId !== undefined ? snapshot.byId : null
     )
-
-    const overlay = { open: false, closing: false, sessionId: null, listeners: new Set() }
-    let overlayCloseTimer = null
-
-    function notifyOverlay() {
-      for (const listener of [...overlay.listeners]) {
-        try {
-          listener()
-        } catch (error) {
-          console.warn('[treecom] overlay listener failed', error)
-        }
-      }
-    }
-
-    /** The panel is a self-contained frame overlay, so it never depends on the right sidebar. */
-    function openPanel(sessionId) {
-      if (overlayCloseTimer !== null) {
-        clearTimeout(overlayCloseTimer)
-        overlayCloseTimer = null
-      }
-      if (typeof sessionId === 'string' && sessionId.length > 0) overlay.sessionId = sessionId
-      overlay.open = true
-      overlay.closing = false
-      notifyOverlay()
-      return true
-    }
-
-    function closePanel() {
-      if (!overlay.open || overlay.closing) return
-      overlay.closing = true
-      notifyOverlay()
-      overlayCloseTimer = setTimeout(() => {
-        overlayCloseTimer = null
-        overlay.open = false
-        overlay.closing = false
-        notifyOverlay()
-      }, 230)
-    }
-
-    /** Keep an open panel pointed at whichever branch is on screen now. */
-    function syncOverlaySession(sessionId) {
-      if (!overlay.open || overlay.sessionId === sessionId) return
-      overlay.sessionId = sessionId
-      notifyOverlay()
-    }
-
-    function useOverlay() {
-      const [, bump] = useState(0)
-      useEffect(() => {
-        const listener = () => bump((value) => value + 1)
-        overlay.listeners.add(listener)
-        return () => overlay.listeners.delete(listener)
-      }, [])
-      return overlay
-    }
 
     async function switchTo(targetId, focus) {
       const workspace = appCtx?.get('uiWorkspace')
@@ -530,7 +466,6 @@ window.__ModuleLoader__.load({
         atSeq: node.endSeq,
         increaseTitle: true,
       })
-      pending.panelSession = childId
       pending.focusSession = childId
       selectionIntent = { sessionId: childId, nodeId: null }
       try {
@@ -2286,212 +2221,22 @@ window.__ModuleLoader__.load({
       return h(TreePanel, { ...props, variant: 'view' })
     }
 
+    function SidebarTree(props) {
+      return h('div', { className: 'tc-sidebar-body' },
+        h(TreePanel, { ...props, variant: 'sidebar' }))
+    }
+
     /**
      * Self-contained floating tree. It is root-scoped on purpose: the right
      * sidebar controller is not always reachable from a dynamic Client plugin,
      * and a conversation View tab steals the Chat surface. This panel floats
      * over the frame, hides the composer while open, and follows the active branch.
      */
-    function readOverlayWidth() {
-      const max = typeof window === 'undefined' ? 1100 : Math.max(560, Math.min(1100, window.innerWidth - 80))
-      const fallback = Math.min(820, max)
-      try {
-        const value = Number(localStorage.getItem(WIDTH_KEY))
-        return Number.isFinite(value) && value > 0 ? Math.min(Math.max(value, 560), max) : fallback
-      } catch {
-        return fallback
-      }
-    }
-
-    function TreeOverlay(props) {
-      const state = useOverlay()
-      const [width, setWidth] = useState(readOverlayWidth)
-      const [composerOpen, setComposerOpen] = useState(false)
-      const widthRef = useRef(width)
-      useEffect(() => {
-        widthRef.current = width
-      }, [width])
-      useEffect(() => {
-        if (!state.open) setComposerOpen(false)
-      }, [state.open])
-      useEffect(() => {
-        if (!state.open) return undefined
-        const onKeyDown = (event) => {
-          if (event.key === 'Escape') closePanel()
-        }
-        window.addEventListener('keydown', onKeyDown)
-        return () => window.removeEventListener('keydown', onKeyDown)
-      }, [state.open])
-
-      useEffect(() => {
-        if (!state.open) return undefined
-        const onPointerDown = (event) => {
-          const target = event.target
-          if (!(target instanceof Element)) return
-          if (target.closest('.tc-overlay-panel') !== null) return
-          if (target.closest('.tc-open-btn') !== null) return
-          // The revealed composer is meant to stay usable while the panel is open.
-          if (target.closest('[data-composer-seat],[data-conversation-region="composer"],[data-composer-card],[data-composer-input],[data-composer-dock],[data-composer-overlay],[data-conversation-composer-overlay]') !== null) return
-          // Clicking elsewhere in the conversation retracts the side panel.
-          if (target.closest('[data-conversation-scroll],[data-conversation-content]') === null) return
-          closePanel()
-        }
-        document.addEventListener('pointerdown', onPointerDown, true)
-        return () => document.removeEventListener('pointerdown', onPointerDown, true)
-      }, [state.open])
-
-      useEffect(() => {
-        const root = document.documentElement
-        if (!state.open) {
-          document.body.classList.remove('tc-overlay-open', 'tc-overlay-composer')
-          delete root.dataset.treecomOverlay
-          return undefined
-        }
-        document.body.classList.add('tc-overlay-open')
-        if (composerOpen) document.body.classList.add('tc-overlay-composer')
-        else document.body.classList.remove('tc-overlay-composer')
-        root.dataset.treecomOverlay = 'open'
-        return () => {
-          document.body.classList.remove('tc-overlay-open', 'tc-overlay-composer')
-          delete root.dataset.treecomOverlay
-        }
-      }, [state.open, composerOpen])
-
-      // The composer lives in the conversation tree, not inside this overlay.
-      // Hide it by element identity as well as by CSS: themes can portal the
-      // editor into a different DOM root, where a body-level selector misses it.
-      useEffect(() => {
-        if (!state.open || composerOpen) return undefined
-        const selector = '[data-composer-seat],[data-conversation-region="composer"],[data-composer-card],[data-composer-input],[data-composer-dock],[data-composer-overlay],[data-conversation-composer-overlay],[contenteditable="true"],textarea'
-        const hidden = new Map()
-        const hide = (element) => {
-          if (!(element instanceof HTMLElement) || element.closest('.tc-overlay-panel') !== null) return
-          if (hidden.has(element)) return
-          hidden.set(element, element.style.display)
-          element.style.setProperty('display', 'none', 'important')
-        }
-        const apply = () => {
-          const matches = []
-          const visit = (root) => {
-            for (const element of root.querySelectorAll('*')) {
-              if (element.shadowRoot !== null) visit(element.shadowRoot)
-              if (element.matches(selector)) matches.push(element)
-            }
-          }
-          visit(document)
-          for (const element of matches) {
-            const container = element.closest('[data-composer-card],[data-composer-seat],[data-composer-dock],[data-composer-overlay],[data-conversation-region="composer"],[class*="composer" i]')
-            hide(container === document.body || container === document.documentElement ? element : (container ?? element))
-          }
-        }
-        apply()
-        let frame = 0
-        const observer = new MutationObserver(() => {
-          if (frame !== 0) return
-          frame = requestAnimationFrame(() => {
-            frame = 0
-            apply()
-          })
-        })
-        observer.observe(document.body, { childList: true, subtree: true })
-        return () => {
-          observer.disconnect()
-          if (frame !== 0) cancelAnimationFrame(frame)
-          for (const [element, value] of hidden) {
-            if (!element.isConnected) continue
-            if (value === '') element.style.removeProperty('display')
-            else element.style.setProperty('display', value)
-          }
-        }
-      }, [state.open, composerOpen])
-
-      const startResize = (event) => {
-        event.preventDefault()
-        event.stopPropagation()
-        const startWidth = width
-        let latest = startWidth
-        const max = Math.max(560, Math.min(1100, window.innerWidth - 80))
-        const onMove = (moveEvent) => {
-          const raw = window.innerWidth - moveEvent.clientX
-          latest = raw
-          setWidth(Math.max(320, Math.min(max, raw)))
-        }
-        const onUp = () => {
-          window.removeEventListener('pointermove', onMove)
-          window.removeEventListener('pointerup', onUp)
-          const closeByDrag = latest < 480
-          const next = closeByDrag ? startWidth : Math.min(max, Math.max(560, latest))
-          setWidth(next)
-          try {
-            localStorage.setItem(WIDTH_KEY, String(next))
-          } catch {
-            /* storage may be unavailable */
-          }
-          if (closeByDrag) closePanel()
-        }
-        window.addEventListener('pointermove', onMove)
-        window.addEventListener('pointerup', onUp)
-      }
-      if (!state.open || state.sessionId === null) return null
-      return h('div', {
-        className: 'tc-overlay',
-        role: 'dialog',
-        'aria-label': translate('panel.title'),
-      },
-        h('div', { className: `tc-overlay-panel${state.closing ? ' tc-overlay-panel--closing' : ''}`, style: { width: `${width}px` } },
-          h('div', {
-            className: 'tc-resize',
-            role: 'separator',
-            'aria-orientation': 'vertical',
-            'aria-label': translate('panel.resize'),
-            title: translate('panel.resize'),
-            onPointerDown: startResize,
-          }),
-          h('div', { className: 'tc-overlay-bar' },
-            h('span', { className: 'tc-overlay-title' }, translate('panel.title')),
-            h('span', { className: 'tc-spacer' }),
-            h(IconButton, { label: translate('panel.close'), name: 'x', onClick: closePanel })),
-          h(TreePanel, {
-            sessionId: state.sessionId,
-            variant: 'overlay',
-            useAccess: props.useAccess,
-            useSession: props.useSession,
-            useWorkspaces: props.useWorkspaces,
-            useSessions: props.useSessions,
-          }),
-          h('div', { className: 'tc-overlay-foot' },
-            h('button', {
-              type: 'button',
-              className: 'tc-overlay-composer-toggle',
-              onClick: () => {
-                if (composerOpen) {
-                  setComposerOpen(false)
-                  return
-                }
-                setComposerOpen(true)
-                setTimeout(() => {
-                  try {
-                    const input = document.querySelector('[data-composer-input]')
-                    if (input !== null && typeof input.focus === 'function') input.focus()
-                  } catch {
-                    /* composer may not be mounted */
-                  }
-                }, 80)
-              },
-            }, h(Icon, { name: composerOpen ? 'down' : 'plus', size: 13 }),
-              translate(composerOpen ? 'overlay.hideComposer' : 'overlay.showComposer')))))
-    }
-
     /* ------------------------------------------------- header opener -- */
 
     function OpenButton(props) {
       const { sessionId, inputActions } = props
       useEffect(() => {
-        if (overlay.open) syncOverlaySession(sessionId)
-        if (pending.panelSession === sessionId) {
-          pending.panelSession = null
-          setTimeout(() => { openPanel(sessionId) }, 60)
-        }
         if (pending.focusSession === sessionId) {
           pending.focusSession = null
           setTimeout(() => {
@@ -2504,15 +2249,25 @@ window.__ModuleLoader__.load({
         }
       }, [sessionId, inputActions])
 
+      const openSidebar = () => {
+        const sidebar = appCtx?.get('sidebarRight')
+        if (sidebar === undefined || typeof sidebar.openTab !== 'function') {
+          console.warn('[treecom] sidebarRight is unavailable')
+          return
+        }
+        try {
+          sidebar.openTab('treecom')
+        } catch (error) {
+          console.warn('[treecom] opening the right sidebar failed', error)
+        }
+      }
+
       return h('button', {
         type: 'button',
         className: 'tc-open-btn',
         title: translate('header.open'),
         'aria-label': translate('header.open'),
-        onClick: () => {
-          if (overlay.open && !overlay.closing) closePanel()
-          else openPanel(sessionId)
-        },
+        onClick: openSidebar,
       }, h(Icon, { name: 'tree', size: 14 }), h('span', null, translate('header.open')))
     }
 
@@ -2628,24 +2383,12 @@ window.__ModuleLoader__.load({
 .tc-branch-action:hover:not(:disabled){background:var(--dsw-alias-bg-layer-2);border-color:var(--dsw-alias-border-l2);color:var(--dsw-alias-label-primary)}
 .tc-branch-action:disabled{opacity:.45;cursor:not-allowed}
 .tc-action-error{margin-left:2px;color:var(--dsw-alias-state-error-primary);font-weight:700;cursor:help}
-.tc-overlay{position:fixed;inset:0;z-index:2147483000;display:flex;justify-content:flex-end;pointer-events:none}
-body.tc-overlay-open:not(.tc-overlay-composer) [data-composer-seat],body.tc-overlay-open:not(.tc-overlay-composer) [data-conversation-region="composer"],body.tc-overlay-open:not(.tc-overlay-composer) [data-composer-card],body.tc-overlay-open:not(.tc-overlay-composer) [data-composer-input],body.tc-overlay-open:not(.tc-overlay-composer) [data-composer-dock],body.tc-overlay-open:not(.tc-overlay-composer) [data-composer-overlay],body.tc-overlay-open:not(.tc-overlay-composer) [data-conversation-composer-overlay],body.tc-overlay-open:not(.tc-overlay-composer) [contenteditable="true"],body.tc-overlay-open:not(.tc-overlay-composer) textarea{display:none!important}body.tc-view-tree-open:not(.tc-overlay-composer) [data-composer-seat],body.tc-view-tree-open:not(.tc-overlay-composer) [data-conversation-region="composer"],body.tc-view-tree-open:not(.tc-overlay-composer) [data-composer-card],body.tc-view-tree-open:not(.tc-overlay-composer) [data-composer-input],body.tc-view-tree-open:not(.tc-overlay-composer) [data-composer-dock],body.tc-view-tree-open:not(.tc-overlay-composer) [data-composer-overlay],body.tc-view-tree-open:not(.tc-overlay-composer) [data-conversation-composer-overlay],body.tc-view-tree-open:not(.tc-overlay-composer) [contenteditable="true"],body.tc-view-tree-open:not(.tc-overlay-composer) textarea{display:none!important}
-.tc-overlay-panel{position:relative;pointer-events:auto;max-width:92vw;height:100%;display:flex;flex-direction:column;background:var(--dsw-alias-bg-base);border-left:1px solid var(--dsw-alias-border-l1);box-shadow:-12px 0 32px rgba(0,0,0,.18);will-change:transform;animation:tc-overlay-in .24s cubic-bezier(.22,1,.36,1)}
-body.tc-overlay-composer .tc-overlay-panel{height:calc(100% - 116px)}
-.tc-overlay-panel--closing{animation:tc-overlay-out .23s cubic-bezier(.4,0,.2,1) forwards;pointer-events:none}
-@keyframes tc-overlay-in{from{transform:translateX(100%);opacity:.85}to{transform:translateX(0);opacity:1}}
-@keyframes tc-overlay-out{from{transform:translateX(0);opacity:1}to{transform:translateX(100%);opacity:.9}}
-.tc-overlay-bar{display:flex;align-items:center;gap:8px;height:40px;padding:0 12px;border-bottom:1px solid var(--dsw-alias-border-l1);flex-shrink:0}
-.tc-overlay-title{font-weight:600;font-size:13px}
-.tc-overlay .tc-panel{flex:1;min-height:0}
-.tc-overlay-foot{flex-shrink:0;display:flex;justify-content:center;padding:8px 12px;border-top:1px solid var(--dsw-alias-border-l1);background:var(--dsw-alias-bg-base)}
-.tc-overlay-composer-toggle{display:inline-flex;align-items:center;gap:6px;height:26px;padding:0 10px;border:1px solid var(--dsw-alias-border-l2);border-radius:6px;background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-secondary);font:inherit;font-size:11px;cursor:pointer}
-.tc-overlay-composer-toggle:hover{background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-primary)}
-.tc-resize{position:absolute;left:-3px;top:0;bottom:0;width:8px;z-index:6;cursor:col-resize;touch-action:none}
-.tc-resize::after{content:"";position:absolute;left:3px;top:50%;transform:translateY(-50%);width:2px;height:36px;border-radius:1px;background:var(--dsw-alias-border-l2);opacity:0;transition:opacity .12s}
-.tc-overlay-panel:hover .tc-resize::after{opacity:1}
-@media (max-width:640px){.tc-overlay-panel{width:100%!important}.tc-resize{display:none}}
-@media (prefers-reduced-motion:reduce){.tc-overlay-panel{animation:none}.tc-overlay-panel--closing{animation:none;opacity:0}}
+body.tc-view-tree-open [data-composer-seat],body.tc-view-tree-open [data-conversation-region="composer"],body.tc-view-tree-open [data-composer-card],body.tc-view-tree-open [data-composer-input],body.tc-view-tree-open [data-composer-dock],body.tc-view-tree-open [data-composer-overlay],body.tc-view-tree-open [data-conversation-composer-overlay],body.tc-view-tree-open [contenteditable="true"],body.tc-view-tree-open textarea{display:none!important}
+.tc-sidebar-body{height:100%;min-height:0;display:flex;flex-direction:column;overflow:hidden}
+.tc-sidebar-body .tc-panel{flex:1;min-height:0}
+.tc-sidebar-body .tc-workspace{flex-direction:column}
+.tc-sidebar-body .tc-canvas-wrap{flex:1 1 auto;min-height:240px}
+.tc-sidebar-body .tc-side{flex:0 0 46%;width:100%;max-width:none;max-height:52%;border-left:0;border-top:1px solid var(--dsw-alias-border-l1)}
 .tc-toast{position:absolute;top:46px;left:50%;transform:translateX(-50%);z-index:5;padding:5px 10px;border-radius:999px;background:var(--dsw-alias-bg-layer-3);border:1px solid var(--dsw-alias-border-l2);color:var(--dsw-alias-label-primary);box-shadow:var(--dsw-elevation-panel);font-size:11px;white-space:nowrap;pointer-events:none;animation:tc-toast-in .15s ease-out}
 @keyframes tc-toast-in{from{opacity:0;transform:translate(-50%,-4px)}to{opacity:1;transform:translate(-50%,0)}}
 .tc-open-btn{display:inline-flex;align-items:center;gap:5px;height:28px;padding:0 8px;border:1px solid var(--dsw-alias-border-l1);border-radius:6px;background:transparent;color:var(--dsw-alias-label-secondary);font:inherit;font-size:12px;cursor:pointer}
@@ -2791,11 +2534,25 @@ body.tc-overlay-composer .tc-overlay-panel{height:calc(100% - 116px)}
           label: () => translate('view.title'),
         }, ViewTree))
 
-        ctx.slots.inject('shell.overlay', () => ctx.slots.register({
-          name: 'shell.overlay',
-          id: 'treecom-overlay',
-          order: 90,
-        }, TreeOverlay))
+        ctx.slots.inject('sidebar.right.pane.tab', () => ctx.slots.register({
+          name: 'sidebar.right.pane.tab',
+          key: 'treecom',
+          inject: (sessionId) => ({ sessionId }),
+        }, SidebarTree))
+
+        if (typeof ctx.inject === 'function') {
+          ctx.inject(['sidebarRightTabs'], (scope) => {
+            const tabs = scope.get('sidebarRightTabs')
+            if (tabs === undefined || typeof tabs.register !== 'function') return
+            ctx.effect(() => tabs.register({
+              id: 'treecom',
+              kind: 'treecom',
+              keepMounted: true,
+              priority: 'extension',
+              title: () => translate('panel.title'),
+            }), 'treecom: right sidebar tab')
+          })
+        }
 
         ctx.slots.inject('conversation.session.header.utilities', () => ctx.slots.register({
           name: 'conversation.session.header.utilities',
