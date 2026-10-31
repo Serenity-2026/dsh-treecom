@@ -26,7 +26,7 @@ window.__ModuleLoader__.load({
     const ROUTE = '/treecom'
     const NS = 'treecom'
     const VIEW_ID = 'treecom'
-    const WIDTH_KEY = 'treecom:width:v2'
+    const WIDTH_KEY = 'treecom:width:v3'
     const DETAIL_CACHE_MS = 10_000
 
     /* --------------------------------------------------------- locale -- */
@@ -1052,6 +1052,10 @@ window.__ModuleLoader__.load({
       const [zoom, setZoom] = useState(1)
       const [dragging, setDragging] = useState(false)
       const [tip, setTip] = useState(null)
+      const [tipDetail, setTipDetail] = useState(null)
+      const [tipLoading, setTipLoading] = useState(false)
+      const [tipError, setTipError] = useState(null)
+      const tipCloseTimer = useRef(null)
       const dragRef = useRef(null)
       const suppressClick = useRef(false)
       const centeredSession = useRef(null)
@@ -1078,9 +1082,52 @@ window.__ModuleLoader__.load({
       }
 
       useEffect(() => {
+        if (tipCloseTimer.current !== null) {
+          clearTimeout(tipCloseTimer.current)
+          tipCloseTimer.current = null
+        }
         setTip(null)
         centeredSession.current = null
       }, [sessionId])
+
+      useEffect(() => {
+        const node = tip?.node ?? null
+        if (node === null || node.kind === 'root') {
+          setTipDetail(null)
+          setTipLoading(false)
+          setTipError(null)
+          return undefined
+        }
+        const cacheKey = `${node.id}:${node.endSeq ?? ''}`
+        const cached = detailCache.get(cacheKey)
+        if (cached !== undefined && Date.now() - cached.at < DETAIL_CACHE_MS) {
+          setTipDetail(cached.detail)
+          setTipLoading(false)
+          setTipError(null)
+          return undefined
+        }
+        let cancelled = false
+        setTipDetail(null)
+        setTipLoading(true)
+        setTipError(null)
+        fetchDetail(node.id).then((detail) => {
+          if (cancelled) return
+          detailCache.set(cacheKey, { at: Date.now(), detail })
+          setTipDetail(detail)
+        }).catch((error) => {
+          if (!cancelled) setTipError(noticeText(error))
+        }).finally(() => {
+          if (!cancelled) setTipLoading(false)
+        })
+        return () => { cancelled = true }
+      }, [tip?.node.id, tip?.node.endSeq])
+
+      useEffect(() => () => {
+        if (tipCloseTimer.current !== null) {
+          clearTimeout(tipCloseTimer.current)
+          tipCloseTimer.current = null
+        }
+      }, [])
 
       useEffect(() => {
         const wrap = wrapRef.current
@@ -1094,6 +1141,7 @@ window.__ModuleLoader__.load({
         const wrap = wrapRef.current
         if (wrap === null) return undefined
         const onWheel = (event) => {
+          if (typeof Element !== 'undefined' && event.target instanceof Element && event.target.closest('.tc-canvas-tip') !== null) return
           event.preventDefault()
           const rect = wrap.getBoundingClientRect()
           if (rect.width === 0 || rect.height === 0) return
@@ -1117,9 +1165,33 @@ window.__ModuleLoader__.load({
 
       const isElement = (value) => typeof Element !== 'undefined' && value instanceof Element
 
+      const clearTipTimer = () => {
+        if (tipCloseTimer.current !== null) {
+          clearTimeout(tipCloseTimer.current)
+          tipCloseTimer.current = null
+        }
+      }
+
+      const hideTipNow = () => {
+        clearTipTimer()
+        setTip(null)
+      }
+
+      const scheduleHideTip = () => {
+        clearTipTimer()
+        tipCloseTimer.current = setTimeout(() => {
+          tipCloseTimer.current = null
+          setTip(null)
+        }, 180)
+      }
+
+      const cancelHideTip = () => {
+        clearTipTimer()
+      }
+
       const startDrag = (event) => {
         if (event.button !== 0) return
-        if (isElement(event.target) && event.target.closest('.tc-canvas-node, .tc-canvas-toolbar') !== null) return
+        if (isElement(event.target) && event.target.closest('.tc-canvas-node, .tc-canvas-toolbar, .tc-canvas-tip') !== null) return
         const wrap = wrapRef.current
         if (wrap === null) return
         dragRef.current = {
@@ -1131,7 +1203,7 @@ window.__ModuleLoader__.load({
           moved: false,
         }
         setDragging(true)
-        setTip(null)
+        hideTipNow()
         try {
           wrap.setPointerCapture(event.pointerId)
         } catch {
@@ -1164,11 +1236,18 @@ window.__ModuleLoader__.load({
       const showTip = (node, element) => {
         const wrap = wrapRef.current
         if (wrap === null) return
+        cancelHideTip()
         const wrapRect = wrap.getBoundingClientRect()
         const rect = element.getBoundingClientRect()
-        const x = Math.max(120, Math.min(Math.max(120, wrapRect.width - 120), rect.left - wrapRect.left + rect.width / 2))
+        const half = Math.min(160, Math.max(80, (wrapRect.width - 24) / 2))
+        const centerX = rect.left - wrapRect.left + rect.width / 2
+        const x = Math.max(half, Math.min(Math.max(half, wrapRect.width - half), centerX))
         const y = rect.top - wrapRect.top + rect.height / 2
-        setTip({ node, x, y, after: afterFor(node), below: y < 130 })
+        const spaceBelow = Math.max(0, wrapRect.height - y - 24)
+        const spaceAbove = Math.max(0, y - 24)
+        const below = spaceBelow >= 160 && (spaceBelow >= spaceAbove || spaceAbove < 160)
+        const maxHeight = Math.max(160, Math.min(420, below ? spaceBelow : spaceAbove))
+        setTip({ node, x, y, after: afterFor(node), below, maxHeight })
       }
 
       const nodes = []
@@ -1204,7 +1283,7 @@ window.__ModuleLoader__.load({
           },
           onPointerDown: (event) => event.stopPropagation(),
           onMouseEnter: (event) => showTip(node, event.currentTarget),
-          onMouseLeave: () => setTip(null),
+          onMouseLeave: scheduleHideTip,
         },
           h('span', { className: 'tc-canvas-node-halo', 'aria-hidden': 'true' },
             chain !== null ? h('span', { className: 'tc-canvas-node-count' }, String(chain.count)) : null),
@@ -1233,23 +1312,51 @@ window.__ModuleLoader__.load({
           : tip.node.kind === 'blank'
             ? translate('node.blank')
             : fmt(translate('node.turn'), { n: tip.node.turn })
+        const tipQuestion = tip.node.kind === 'root'
+          ? translate('node.rootDetail')
+          : (tipDetail?.prompt ?? tip.node.prompt ?? tip.node.label ?? translate('node.blank'))
+        const tipAnswer = tipDetail?.answer ?? tip.node.answer ?? ''
+        const tipAnswerText = tip.node.kind === 'root'
+          ? ''
+          : tipAnswer !== ''
+            ? tipAnswer
+            : tipLoading
+              ? translate('node.detailLoading')
+              : tip.node.open === true
+                ? translate('node.detailWaiting')
+                : translate('node.answerEmpty')
+        const tipErrorText = tipError === null ? null : fmt(translate('node.detailFailed'), { message: tipError })
         tipElement = h('div', {
           className: 'tc-canvas-tip',
+          role: 'tooltip',
           style: {
             left: `${tip.x}px`,
             top: `${tip.below ? tip.y + 20 : tip.y - 14}px`,
             transform: tip.below ? 'translate(-50%, 0)' : 'translate(-50%, -100%)',
+            maxHeight: `${tip.maxHeight}px`,
           },
+          onMouseEnter: cancelHideTip,
+          onMouseLeave: scheduleHideTip,
+          onPointerDown: (event) => event.stopPropagation(),
+          onClick: (event) => event.stopPropagation(),
         },
           h('div', { className: 'tc-tip-head' },
             h('span', { className: 'tc-tip-turn' }, tipTurn),
             tip.node.id === activeId ? h('span', { className: 'tc-tip-here' }, translate('node.youAreHere')) : null),
-          h('div', { className: 'tc-tip-q' }, tip.node.prompt || tip.node.label || translate('node.blank')),
           tipChain !== null ? h('div', { className: 'tc-tip-chain' }, fmt(translate('node.chainHint'), { n: tipChain.count })) : null,
           h('div', { className: 'tc-tip-meta' },
             tipContext.hasContext ? `${tipContext.contextPct}%` : translate('node.contextUnknown'),
             ' · ',
             fmt(translate('node.afterShort'), { n: tip.after.n })),
+          h('div', { className: 'tc-tip-body' },
+            h('div', { className: 'tc-tip-section' },
+              h('div', { className: 'tc-tip-label' }, translate('node.questionLabel')),
+              h('div', { className: 'tc-tip-text' }, tipQuestion)),
+            tip.node.kind === 'root' ? null : h('div', { className: 'tc-tip-section' },
+              h('div', { className: 'tc-tip-label' }, translate('node.answerLabel')),
+              h('div', { className: 'tc-tip-text' }, tipAnswerText)),
+            tipErrorText !== null ? h('div', { className: 'tc-tip-error' }, tipErrorText) : null,
+            tipDetail?.truncated === true ? h('div', { className: 'tc-tip-note' }, translate('node.detailTruncated')) : null),
           h('div', { className: 'tc-tip-hint' }, translate('node.hoverHint')))
       }
 
@@ -1262,7 +1369,7 @@ window.__ModuleLoader__.load({
         onPointerUp: endDrag,
         onPointerCancel: endDrag,
         onClick: () => {
-          if (!suppressClick.current) setTip(null)
+          if (!suppressClick.current) hideTipNow()
         },
       },
         h('div', {
@@ -2034,15 +2141,16 @@ window.__ModuleLoader__.load({
      * Self-contained floating tree. It is root-scoped on purpose: the right
      * sidebar controller is not always reachable from a dynamic Client plugin,
      * and a conversation View tab steals the Chat surface. This panel floats
-     * over the frame, leaves the composer usable, and follows the active branch.
+     * over the frame, hides the composer while open, and follows the active branch.
      */
     function readOverlayWidth() {
-      const max = typeof window === 'undefined' ? 1100 : Math.max(560, window.innerWidth)
+      const max = typeof window === 'undefined' ? 1100 : Math.max(560, Math.min(1100, window.innerWidth - 80))
+      const fallback = Math.min(820, max)
       try {
         const value = Number(localStorage.getItem(WIDTH_KEY))
-        return Number.isFinite(value) && value > 0 ? Math.min(Math.max(value, 560), max) : max
+        return Number.isFinite(value) && value > 0 ? Math.min(Math.max(value, 560), max) : fallback
       } catch {
-        return max
+        return fallback
       }
     }
 
@@ -2063,9 +2171,18 @@ window.__ModuleLoader__.load({
       }, [state.open])
 
       useEffect(() => {
-        if (!state.open) return undefined
+        const root = document.documentElement
+        if (!state.open) {
+          document.body.classList.remove('tc-overlay-open')
+          delete root.dataset.treecomOverlay
+          return undefined
+        }
         document.body.classList.add('tc-overlay-open')
-        return () => document.body.classList.remove('tc-overlay-open')
+        root.dataset.treecomOverlay = 'open'
+        return () => {
+          document.body.classList.remove('tc-overlay-open')
+          delete root.dataset.treecomOverlay
+        }
       }, [state.open])
 
       useEffect(() => {
@@ -2088,7 +2205,7 @@ window.__ModuleLoader__.load({
         event.preventDefault()
         event.stopPropagation()
         const onMove = (moveEvent) => {
-          const max = Math.max(560, window.innerWidth)
+          const max = Math.max(560, Math.min(1100, window.innerWidth - 80))
           const next = Math.min(max, Math.max(560, window.innerWidth - moveEvent.clientX))
           setWidth(next)
         }
@@ -2280,8 +2397,8 @@ window.__ModuleLoader__.load({
 .tc-branch-action:disabled{opacity:.45;cursor:not-allowed}
 .tc-action-error{margin-left:2px;color:var(--dsw-alias-state-error-primary);font-weight:700;cursor:help}
 .tc-overlay{position:fixed;inset:0;z-index:2147483000;display:flex;justify-content:flex-end;pointer-events:none}
-body.tc-overlay-open [data-conversation-scroll],body.tc-overlay-open [data-composer-seat]{visibility:hidden!important}
-.tc-overlay-panel{position:relative;pointer-events:auto;max-width:100vw;height:100%;display:flex;flex-direction:column;background:var(--dsw-alias-bg-base);border-left:1px solid var(--dsw-alias-border-l1);box-shadow:-12px 0 32px rgba(0,0,0,.18);will-change:transform;animation:tc-overlay-in .24s cubic-bezier(.22,1,.36,1)}
+:where(body.tc-overlay-open,html[data-treecom-overlay="open"]) [data-composer-seat],:where(body.tc-overlay-open,html[data-treecom-overlay="open"]) [data-conversation-region="composer"],:where(body.tc-overlay-open,html[data-treecom-overlay="open"]) [data-composer-card],:where(body.tc-overlay-open,html[data-treecom-overlay="open"]) [data-composer-input],:where(body.tc-overlay-open,html[data-treecom-overlay="open"]) [data-composer-dock],:where(body.tc-overlay-open,html[data-treecom-overlay="open"]) [data-composer-overlay],:where(body.tc-overlay-open,html[data-treecom-overlay="open"]) [data-conversation-composer-overlay]{display:none!important}
+.tc-overlay-panel{position:relative;pointer-events:auto;max-width:92vw;height:100%;display:flex;flex-direction:column;background:var(--dsw-alias-bg-base);border-left:1px solid var(--dsw-alias-border-l1);box-shadow:-12px 0 32px rgba(0,0,0,.18);will-change:transform;animation:tc-overlay-in .24s cubic-bezier(.22,1,.36,1)}
 .tc-overlay-panel--closing{animation:tc-overlay-out .23s cubic-bezier(.4,0,.2,1) forwards;pointer-events:none}
 @keyframes tc-overlay-in{from{transform:translateX(100%);opacity:.85}to{transform:translateX(0);opacity:1}}
 @keyframes tc-overlay-out{from{transform:translateX(0);opacity:1}to{transform:translateX(100%);opacity:.9}}
@@ -2326,11 +2443,17 @@ body.tc-overlay-open [data-conversation-scroll],body.tc-overlay-open [data-compo
 .tc-canvas-btn{height:24px;padding:0 8px;border:1px solid var(--dsw-alias-border-l1);border-radius:6px;background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-secondary);font:inherit;font-size:11px;cursor:pointer;white-space:nowrap}
 .tc-canvas-btn:hover{background:var(--dsw-alias-bg-layer-2);border-color:var(--dsw-alias-border-l2);color:var(--dsw-alias-label-primary)}
 .tc-canvas-hint{position:absolute;left:12px;bottom:10px;right:12px;z-index:5;color:var(--dsw-alias-label-tertiary);font-size:10px;pointer-events:none;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.tc-canvas-tip{position:absolute;z-index:30;width:260px;max-width:calc(100% - 24px);box-sizing:border-box;padding:9px 10px;border:1px solid var(--dsw-alias-border-l2);border-radius:8px;background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-primary);box-shadow:var(--dsw-elevation-panel,0 10px 28px rgba(0,0,0,.22));pointer-events:none;font-size:11px;line-height:1.45}
+.tc-canvas-tip{position:absolute;z-index:30;width:320px;max-width:calc(100% - 24px);max-height:calc(100% - 16px);box-sizing:border-box;padding:9px 10px;border:1px solid var(--dsw-alias-border-l2);border-radius:8px;background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-primary);box-shadow:var(--dsw-elevation-panel,0 10px 28px rgba(0,0,0,.22));pointer-events:auto;font-size:11px;line-height:1.45;display:flex;flex-direction:column}
 .tc-tip-head{display:flex;align-items:center;gap:6px;min-width:0}
 .tc-tip-turn{font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .tc-tip-here{margin-left:auto;padding:0 4px;border:1px solid var(--dsw-alias-state-success-primary);border-radius:4px;color:var(--dsw-alias-state-success-primary);font-size:10px;line-height:15px;white-space:nowrap}
 .tc-tip-q{margin-top:4px;color:var(--dsw-alias-label-secondary);font-size:11px;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden;word-break:break-word}
+.tc-tip-body{margin-top:6px;min-height:0;overflow-y:auto;overscroll-behavior:contain;display:flex;flex-direction:column;gap:7px;padding-right:2px}
+.tc-tip-section{min-width:0}
+.tc-tip-label{margin-bottom:2px;color:var(--dsw-alias-label-tertiary);font-size:10px;font-weight:600;letter-spacing:.02em}
+.tc-tip-text{white-space:pre-wrap;word-break:break-word;color:var(--dsw-alias-label-secondary);font-size:11px;line-height:1.5}
+.tc-tip-error{color:var(--dsw-alias-state-error-label);font-size:10px}
+.tc-tip-note{color:var(--dsw-alias-label-tertiary);font-size:10px}
 .tc-tip-meta{margin-top:5px;color:var(--dsw-alias-label-tertiary);font-size:10px;font-variant-numeric:tabular-nums}
 .tc-tip-hint{margin-top:3px;color:var(--dsw-alias-label-tertiary);font-size:10px}
 .tc-tip-chain{margin-top:5px;color:var(--dsw-alias-state-business-primary);font-size:10px;font-weight:500}
