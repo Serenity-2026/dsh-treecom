@@ -14,6 +14,14 @@ window.__ModuleLoader__.load({
     const React = require('react')
     const h = React.createElement
     const { useCallback, useEffect, useMemo, useRef, useState } = React
+    let createPortal = null
+    try {
+      const ReactDOM = require('react-dom')
+      if (ReactDOM !== null && typeof ReactDOM.createPortal === 'function') createPortal = ReactDOM.createPortal
+    } catch (error) {
+      // The smoke test does not mount a DOM; the real page always has react-dom.
+      console.warn('[treecom] react-dom is unavailable; hover details are disabled', error)
+    }
 
     const ROUTE = '/treecom'
     const NS = 'treecom'
@@ -21,12 +29,13 @@ window.__ModuleLoader__.load({
     const CACHE_MS = 4_000
     const WIDTH_KEY = 'treecom:width'
     const REFRESH_MS = 8_000
+    const DETAIL_CACHE_MS = 10_000
 
     /* --------------------------------------------------------- locale -- */
 
     const ZH = {
       'panel.title': '对话树',
-      'panel.hint': '点击任意节点，从那一轮分叉继续',
+      'panel.hint': '点击节点跳回该轮；悬停查看详情与操作',
       'panel.empty': '还没有分叉。继续提问，树上会自动长出节点。',
       'panel.loading': '正在读取对话树…',
       'panel.error': '读取对话树失败',
@@ -55,6 +64,20 @@ window.__ModuleLoader__.load({
       'node.collapse': '收起子节点',
       'node.expand': '展开子节点',
       'node.collapsed': '已收起',
+      'node.contextLabel': '上下文',
+      'node.contextTitle': '上下文 {used} / {window}（{pct}%）',
+      'node.contextUnknown': '上下文未知',
+      'node.afterShort': '+{n} 轮',
+      'node.afterPathTitle': '当前分支之后还有 {n} 轮',
+      'node.afterBranchTitle': '这条分支之后最多还有 {n} 轮',
+      'node.afterZero': '之后没有更多轮次',
+      'node.questionLabel': '提问',
+      'node.answerLabel': '回答',
+      'node.answerEmpty': '这一轮没有模型回答。',
+      'node.detailWaiting': '等待回答…',
+      'node.detailLoading': '正在读取完整对话…',
+      'node.detailFailed': '详情读取失败：{message}',
+      'node.detailTruncated': '内容较长，已截断。',
       'panel.resize': '拖动调整宽度',
       'node.leafHint': '切到这条分支',
       'action.branch': '分叉',
@@ -77,7 +100,7 @@ window.__ModuleLoader__.load({
 
     const EN = {
       'panel.title': 'Conversation tree',
-      'panel.hint': 'Click any node to branch from that turn',
+      'panel.hint': 'Click a node to return to that turn; hover for details and actions',
       'panel.empty': 'No branches yet. Keep asking and the tree grows by itself.',
       'panel.loading': 'Reading the conversation tree…',
       'panel.error': 'Could not read the conversation tree',
@@ -106,6 +129,20 @@ window.__ModuleLoader__.load({
       'node.collapse': 'Collapse children',
       'node.expand': 'Expand children',
       'node.collapsed': 'Collapsed',
+      'node.contextLabel': 'Context',
+      'node.contextTitle': 'Context {used} / {window} ({pct}%)',
+      'node.contextUnknown': 'Context unknown',
+      'node.afterShort': '+{n} turns',
+      'node.afterPathTitle': '{n} turns after this on the current branch',
+      'node.afterBranchTitle': 'Up to {n} turns after this on this branch',
+      'node.afterZero': 'No more turns after this',
+      'node.questionLabel': 'Question',
+      'node.answerLabel': 'Answer',
+      'node.answerEmpty': 'No answer for this turn yet.',
+      'node.detailWaiting': 'Waiting for an answer…',
+      'node.detailLoading': 'Reading the full conversation…',
+      'node.detailFailed': 'Could not read details: {message}',
+      'node.detailTruncated': 'Long content truncated.',
       'panel.resize': 'Drag to resize',
       'node.leafHint': 'Switch to this branch',
       'action.branch': 'Branch',
@@ -133,6 +170,41 @@ window.__ModuleLoader__.load({
       return String(template).replace(/\{(\w+)\}/g, (match, key) => (
         Object.prototype.hasOwnProperty.call(vars, key) ? String(vars[key]) : match
       ))
+    }
+
+    const numberFormatter = new Intl.NumberFormat()
+    function formatNumber(value) {
+      return Number.isFinite(value) ? numberFormatter.format(value) : '0'
+    }
+
+    function formatTime(value) {
+      if (typeof value !== 'string' || value === '') return ''
+      const date = new Date(value)
+      return Number.isNaN(date.getTime()) ? '' : date.toLocaleString()
+    }
+
+    const detailCache = new Map()
+
+    async function fetchDetail(nodeId) {
+      const response = await fetch(ROUTE, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ action: 'detail', nodeId }),
+      })
+      const body = await response.json().catch(() => null)
+      if (!response.ok || body?.ok !== true) throw new Error(body?.error ?? `HTTP ${response.status}`)
+      return body.detail
+    }
+
+    function detailPosition(rect) {
+      const width = Math.min(360, Math.max(240, window.innerWidth - 24))
+      const gap = 12
+      const top = Math.max(8, Math.min(rect.top, window.innerHeight - 240))
+      const maxHeight = Math.max(200, Math.min(520, window.innerHeight - top - 8))
+      let left = rect.left - width - gap
+      if (left < 8) left = rect.right + gap
+      left = Math.max(8, Math.min(left, window.innerWidth - width - 8))
+      return { left, top, width, maxHeight }
     }
 
     /* ----------------------------------------------------------- data -- */
@@ -422,12 +494,21 @@ window.__ModuleLoader__.load({
     /* ------------------------------------------------------ tree card -- */
 
     function NodeCard(props) {
-      const { node, activeId, onPath, isLeaf, running, busy, archived, canFork, hasChildren, collapsed, onToggle, onActivate, onFork, onRename, onArchive } = props
+      const { node, activeId, onPath, isLeaf, running, busy, archived, canFork, hasChildren, collapsed, onToggle, onActivate, onFork, onRename, onArchive, after, afterOnPath } = props
       const [renaming, setRenaming] = useState(false)
       const [value, setValue] = useState(node.label)
+      const [hovered, setHovered] = useState(false)
+      const [detail, setDetail] = useState(null)
+      const [detailError, setDetailError] = useState(null)
+      const [detailLoading, setDetailLoading] = useState(false)
+      const [pos, setPos] = useState(null)
       const cancelled = useRef(false)
       const suppressClick = useRef(false)
       const inputRef = useRef(null)
+      const cardRef = useRef(null)
+      const openTimer = useRef(null)
+      const closeTimer = useRef(null)
+      const detailToken = useRef(0)
 
       useEffect(() => {
         if (renaming && inputRef.current !== null) {
@@ -439,6 +520,102 @@ window.__ModuleLoader__.load({
       useEffect(() => {
         setValue(node.label)
       }, [node.label])
+
+      useEffect(() => () => {
+        if (openTimer.current !== null) clearTimeout(openTimer.current)
+        if (closeTimer.current !== null) clearTimeout(closeTimer.current)
+        detailToken.current += 1
+      }, [])
+
+      const closeDetail = (immediate = false) => {
+        if (openTimer.current !== null) clearTimeout(openTimer.current)
+        if (closeTimer.current !== null) clearTimeout(closeTimer.current)
+        if (immediate) {
+          detailToken.current += 1
+          setHovered(false)
+          setDetail(null)
+          setDetailError(null)
+          setDetailLoading(false)
+          return
+        }
+        closeTimer.current = setTimeout(() => {
+          closeTimer.current = null
+          detailToken.current += 1
+          setHovered(false)
+          setDetail(null)
+          setDetailError(null)
+          setDetailLoading(false)
+        }, 180)
+      }
+
+      const keepDetail = () => {
+        if (openTimer.current !== null) clearTimeout(openTimer.current)
+        if (closeTimer.current !== null) clearTimeout(closeTimer.current)
+      }
+
+      const openDetail = () => {
+        if (renaming) return
+        if (closeTimer.current !== null) clearTimeout(closeTimer.current)
+        if (openTimer.current !== null) clearTimeout(openTimer.current)
+        if (hovered) {
+          const card = cardRef.current
+          if (card !== null) setPos(detailPosition(card.getBoundingClientRect()))
+          return
+        }
+        openTimer.current = setTimeout(() => {
+          openTimer.current = null
+          const card = cardRef.current
+          if (card === null) return
+          setPos(detailPosition(card.getBoundingClientRect()))
+          setHovered(true)
+          const token = ++detailToken.current
+          const cached = detailCache.get(node.id)
+          if (cached !== undefined && Date.now() - cached.at < DETAIL_CACHE_MS) {
+            setDetail(cached.detail)
+            setDetailError(null)
+            setDetailLoading(false)
+            return
+          }
+          setDetail(null)
+          setDetailError(null)
+          setDetailLoading(true)
+          fetchDetail(node.id).then((nextDetail) => {
+            if (detailToken.current !== token) return
+            detailCache.set(node.id, { at: Date.now(), detail: nextDetail })
+            setDetail(nextDetail)
+            setDetailLoading(false)
+          }).catch((error) => {
+            if (detailToken.current !== token) return
+            setDetailError(noticeText(error))
+            setDetailLoading(false)
+          })
+        }, 180)
+      }
+
+      useEffect(() => {
+        if (!hovered) return undefined
+        const updatePosition = () => {
+          const card = cardRef.current
+          if (card === null) return
+          const rect = card.getBoundingClientRect()
+          if (rect.bottom < 0 || rect.top > window.innerHeight) {
+            closeDetail(true)
+            return
+          }
+          setPos(detailPosition(rect))
+        }
+        const onKeyDown = (event) => {
+          if (event.key === 'Escape') closeDetail(true)
+        }
+        window.addEventListener('scroll', updatePosition, true)
+        window.addEventListener('resize', updatePosition)
+        window.addEventListener('keydown', onKeyDown)
+        return () => {
+          window.removeEventListener('scroll', updatePosition, true)
+          window.removeEventListener('resize', updatePosition)
+          window.removeEventListener('keydown', onKeyDown)
+        }
+      }, [hovered])
 
       const submit = () => {
         suppressClick.current = true
@@ -460,6 +637,28 @@ window.__ModuleLoader__.load({
           ? translate('node.leafHint')
           : translate('node.jumpHint')
 
+      const question = node.prompt !== undefined && node.prompt !== ''
+        ? node.prompt
+        : (node.kind === 'blank' ? translate('node.blank') : node.label)
+      const contextWindow = Number(node.contextWindow)
+      const contextTokens = Number(node.contextTokens)
+      const hasContext = Number.isFinite(contextWindow) && contextWindow > 0
+      const usedContext = Number.isFinite(contextTokens) && contextTokens > 0 ? contextTokens : 0
+      const contextPct = hasContext
+        ? Math.max(0, Math.min(100, Math.round((usedContext / contextWindow) * 100)))
+        : null
+      const contextTitle = hasContext
+        ? fmt(translate('node.contextTitle'), {
+            used: formatNumber(usedContext),
+            window: formatNumber(contextWindow),
+            pct: contextPct,
+          })
+        : translate('node.contextUnknown')
+      const afterCount = Number.isFinite(after) ? Math.max(0, after) : 0
+      const afterTitle = afterCount === 0
+        ? translate('node.afterZero')
+        : fmt(afterOnPath === true ? translate('node.afterPathTitle') : translate('node.afterBranchTitle'), { n: afterCount })
+
       const classes = [
         'tc-card',
         node.kind === 'blank' ? 'tc-card--blank' : '',
@@ -469,108 +668,189 @@ window.__ModuleLoader__.load({
         busy ? 'tc-card--busy' : '',
       ].filter(Boolean).join(' ')
 
-      return h('div', {
-        className: classes,
-        style: { paddingLeft: '34px' },
-        role: 'treeitem',
-        tabIndex: 0,
-        'aria-label': node.label,
-        title: mode,
-        onClick: () => {
-          if (suppressClick.current || renaming) return
-          onActivate(node)
-        },
-        onKeyDown: (event) => {
-          if (event.target !== null && (event.target.tagName === 'INPUT' || event.target.tagName === 'BUTTON')) return
-          if (event.key === 'Enter' || event.key === ' ') {
-            event.preventDefault()
-            onActivate(node)
-          }
-        },
+      const badges = []
+      if (node.id === activeId) {
+        badges.push(h('span', { key: 'here', className: 'tc-badge tc-badge--here' }, translate('node.youAreHere')))
+      }
+      if (node.open === true) {
+        badges.push(h('span', { key: 'open', className: 'tc-badge tc-badge--open' }, translate('node.open')))
+      }
+      if (running) {
+        badges.push(h('span', { key: 'running', className: 'tc-badge tc-badge--running' }, translate('node.running')))
+      }
+
+      const status = h('div', {
+        className: 'tc-status',
+        title: `${contextTitle} · ${afterTitle}`,
       },
-        hasChildren
-          ? h('button', {
-              type: 'button',
-              className: 'tc-card-rail',
-              title: collapsed ? translate('node.expand') : translate('node.collapse'),
-              'aria-label': collapsed ? translate('node.expand') : translate('node.collapse'),
-              'aria-expanded': collapsed !== true,
-              onClick: (event) => {
-                event.stopPropagation()
-                onToggle(node.id)
-              },
-            }, h(Icon, { name: collapsed ? 'right' : 'down', size: 14 }))
-          : h('span', { className: 'tc-card-rail tc-card-rail--empty' }),
-        h('div', { className: 'tc-card-head' },
-          h('span', { className: 'tc-card-label' }, renaming
-            ? h('input', {
-                ref: inputRef,
-                className: 'tc-rename',
-                value,
-                placeholder: translate('node.renamePlaceholder'),
-                onClick: (event) => event.stopPropagation(),
-                onChange: (event) => setValue(event.target.value),
-                onKeyDown: (event) => {
-                  if (event.key === 'Enter') {
-                    event.preventDefault()
-                    event.stopPropagation()
-                    submit()
-                  } else if (event.key === 'Escape') {
-                    event.preventDefault()
-                    event.stopPropagation()
-                    cancelled.current = true
-                    suppressClick.current = true
-                    setTimeout(() => { suppressClick.current = false }, 0)
-                    setRenaming(false)
-                    setValue(node.label)
-                  }
+        h('div', { className: 'tc-ctx' },
+          h('div', { className: 'tc-ctx-top' },
+            h('span', { className: 'tc-ctx-label' }, translate('node.contextLabel')),
+            h('span', { className: 'tc-ctx-pct' }, contextPct === null ? '—' : `${contextPct}%`)),
+          h('div', {
+            className: `tc-ctx-bar${contextPct !== null && contextPct >= 90 ? ' tc-ctx-bar--error' : contextPct !== null && contextPct >= 70 ? ' tc-ctx-bar--warn' : ''}`,
+          }, h('span', { style: { width: `${contextPct ?? 0}%` } }))),
+        h('span', { className: `tc-after${afterCount === 0 ? ' tc-after--none' : ''}` }, fmt(translate('node.afterShort'), { n: afterCount })))
+
+      const detailActions = h('div', { className: 'tc-detail-actions' },
+        archived ? null : h('button', {
+          key: 'archive',
+          type: 'button',
+          className: 'tc-mini-btn',
+          title: running ? translate('node.running') : translate('node.archiveHint'),
+          disabled: running,
+          onClick: (event) => {
+            event.stopPropagation()
+            closeDetail(true)
+            onArchive(node.sessionId)
+          },
+        }, h(Icon, { name: 'archive', size: 12 }), h('span', null, translate('node.archive'))),
+        h('button', {
+          key: 'rename',
+          type: 'button',
+          className: 'tc-mini-btn',
+          title: translate('node.rename'),
+          onClick: (event) => {
+            event.stopPropagation()
+            closeDetail(true)
+            setValue(node.label)
+            setRenaming(true)
+          },
+        }, h(Icon, { name: 'pencil', size: 12 }), h('span', null, translate('node.rename'))),
+        node.kind === 'blank' ? null : h('button', {
+          key: 'fork',
+          type: 'button',
+          className: 'tc-mini-btn',
+          title: running ? translate('node.running') : canFork !== true ? translate('notice.noAccess') : translate('action.branchHint'),
+          disabled: running === true || canFork !== true,
+          onClick: (event) => {
+            event.stopPropagation()
+            closeDetail(true)
+            onFork(node)
+          },
+        }, h(Icon, { name: 'plus', size: 12 }), h('span', null, translate('action.branch'))))
+
+      const fullQuestion = detail?.prompt !== undefined && detail.prompt !== '' ? detail.prompt : question
+      const fullAnswer = detail?.answer ?? ''
+      const detailMeta = []
+      const timeText = formatTime(node.time)
+      if (timeText !== '') detailMeta.push(h('span', { key: 'time' }, timeText))
+      detailMeta.push(h('span', { key: 'context' }, contextTitle))
+      detailMeta.push(h('span', { key: 'after' }, afterTitle))
+
+      const detailNode = hovered && pos !== null && createPortal !== null && typeof document !== 'undefined'
+        ? createPortal(h('div', {
+            className: 'tc-detail',
+            role: 'dialog',
+            'aria-label': question,
+            style: {
+              left: `${pos.left}px`,
+              top: `${pos.top}px`,
+              width: `${pos.width}px`,
+              maxHeight: `${pos.maxHeight}px`,
+            },
+            onMouseEnter: keepDetail,
+            onMouseLeave: () => closeDetail(),
+            onFocus: keepDetail,
+            onBlur: (event) => {
+              if (event.relatedTarget === null || !event.currentTarget.contains(event.relatedTarget)) closeDetail()
+            },
+          },
+            h('div', { className: 'tc-detail-head' },
+              h('div', { className: 'tc-detail-title' }, node.kind === 'blank' ? translate('node.blank') : fmt(translate('node.turn'), { n: node.turn })),
+              node.label !== question ? h('div', { className: 'tc-detail-name' }, node.label) : null),
+            h('div', { className: 'tc-detail-meta' }, detailMeta),
+            h('div', { className: 'tc-detail-section' },
+              h('div', { className: 'tc-detail-label' }, translate('node.questionLabel')),
+              h('div', { className: 'tc-detail-text' }, fullQuestion === '' ? translate('node.waiting') : fullQuestion)),
+            h('div', { className: 'tc-detail-section' },
+              h('div', { className: 'tc-detail-label' }, translate('node.answerLabel')),
+              detailLoading
+                ? h('div', { className: 'tc-detail-loading' }, translate('node.detailLoading'))
+                : detailError !== null
+                  ? h('div', { className: 'tc-detail-error' }, fmt(translate('node.detailFailed'), { message: detailError }))
+                  : h('div', { className: 'tc-detail-text' }, fullAnswer !== ''
+                      ? fullAnswer
+                      : (node.open === true ? translate('node.detailWaiting') : translate('node.answerEmpty')))),
+            detail?.truncated === true ? h('div', { className: 'tc-detail-note' }, translate('node.detailTruncated')) : null,
+            detailActions),
+          document.body)
+        : null
+
+      return h(React.Fragment, null,
+        h('div', {
+          ref: cardRef,
+          className: classes,
+          style: { paddingLeft: '34px' },
+          role: 'treeitem',
+          tabIndex: 0,
+          'aria-label': question,
+          title: mode,
+          onMouseEnter: openDetail,
+          onMouseLeave: () => closeDetail(),
+          onFocus: () => { if (!renaming) openDetail() },
+          onBlur: () => closeDetail(),
+          onClick: () => {
+            if (suppressClick.current || renaming) return
+            closeDetail(true)
+            onActivate(node)
+          },
+          onKeyDown: (event) => {
+            if (event.target !== null && (event.target.tagName === 'INPUT' || event.target.tagName === 'BUTTON')) return
+            if (event.key === 'Enter' || event.key === ' ') {
+              event.preventDefault()
+              closeDetail(true)
+              onActivate(node)
+            }
+          },
+        },
+          hasChildren
+            ? h('button', {
+                type: 'button',
+                className: 'tc-card-rail',
+                title: collapsed ? translate('node.expand') : translate('node.collapse'),
+                'aria-label': collapsed ? translate('node.expand') : translate('node.collapse'),
+                'aria-expanded': collapsed !== true,
+                onClick: (event) => {
+                  event.stopPropagation()
+                  onToggle(node.id)
                 },
-                onBlur: submit,
-              })
-            : h('span', { className: 'tc-card-label-text' }, node.label)),
-          h('span', { className: 'tc-card-badges' },
-            node.kind === 'turn' && node.turn > 0 ? h('span', { className: 'tc-badge' }, fmt(translate('node.turn'), { n: node.turn })) : null,
-            node.kind === 'blank' ? h('span', { className: 'tc-badge tc-badge--blank' }, translate('node.waiting')) : null,
-            node.open === true ? h('span', { className: 'tc-badge tc-badge--open' }, translate('node.open')) : null,
-            running ? h('span', { className: 'tc-badge tc-badge--running' }, translate('node.running')) : null,
-            hasChildren === true && collapsed === true ? h('span', { className: 'tc-badge tc-badge--collapsed' }, translate('node.collapsed')) : null,
-            node.id === activeId ? h('span', { className: 'tc-badge tc-badge--here' }, translate('node.youAreHere')) : null)),
-        node.answer === '' ? null : h('div', { className: 'tc-card-answer' }, node.answer),
-        h('div', { className: 'tc-card-actions' },
-          archived ? null : h('button', {
-            type: 'button',
-            className: 'tc-mini-btn',
-            title: running ? translate('node.running') : translate('node.archiveHint'),
-            'aria-label': translate('node.archive'),
-            disabled: running,
-            onClick: (event) => {
-              event.stopPropagation()
-              onArchive(node.sessionId)
-            },
-          }, h(Icon, { name: 'archive', size: 12 }), h('span', null, translate('node.archive'))),
-          h('button', {
-            type: 'button',
-            className: 'tc-mini-btn',
-            title: translate('node.rename'),
-            'aria-label': translate('node.rename'),
-            onClick: (event) => {
-              event.stopPropagation()
-              setValue(node.label)
-              setRenaming(true)
-            },
-          }, h(Icon, { name: 'pencil', size: 12 }), h('span', null, translate('node.rename'))),
-          node.kind === 'blank' ? null : h('button', {
-            type: 'button',
-            className: 'tc-mini-btn',
-            title: running ? translate('node.running') : canFork !== true ? translate('notice.noAccess') : translate('action.branchHint'),
-            'aria-label': translate('action.branch'),
-            disabled: running === true || canFork !== true,
-            onClick: (event) => {
-              event.stopPropagation()
-              onFork(node)
-            },
-          }, h(Icon, { name: 'plus', size: 12 }), h('span', null, translate('action.branch')))))
+              }, h(Icon, { name: collapsed ? 'right' : 'down', size: 14 }))
+            : h('span', { className: 'tc-card-rail tc-card-rail--empty' }),
+          h('div', { className: 'tc-card-body' },
+            h('div', { className: 'tc-card-main' },
+              h('div', { className: 'tc-card-head' },
+                h('span', { className: 'tc-card-label' }, renaming
+                  ? h('input', {
+                      ref: inputRef,
+                      className: 'tc-rename',
+                      value,
+                      placeholder: translate('node.renamePlaceholder'),
+                      onClick: (event) => event.stopPropagation(),
+                      onChange: (event) => setValue(event.target.value),
+                      onKeyDown: (event) => {
+                        if (event.key === 'Enter') {
+                          event.preventDefault()
+                          event.stopPropagation()
+                          submit()
+                        } else if (event.key === 'Escape') {
+                          event.preventDefault()
+                          event.stopPropagation()
+                          cancelled.current = true
+                          suppressClick.current = true
+                          setTimeout(() => { suppressClick.current = false }, 0)
+                          setRenaming(false)
+                          setValue(node.label)
+                        }
+                      },
+                      onBlur: submit,
+                    })
+                  : h('span', { className: 'tc-card-label-text' }, question))),
+              badges.length > 0 ? h('div', { className: 'tc-card-badges' }, badges) : null),
+            status)),
+        detailNode)
     }
+
 
     /* ---------------------------------------------------------- panel -- */
 
@@ -833,6 +1113,48 @@ window.__ModuleLoader__.load({
         return path
       }, [index, effectiveSelectedId])
 
+      const afterInfo = useMemo(() => {
+        const pathAfter = new Map()
+        const maxAfter = new Map()
+        const activePath = new Set()
+        if (index !== null) {
+          const path = []
+          let current = activeLeafId !== null ? index.byId.get(activeLeafId) : null
+          const guard = new Set()
+          while (current !== undefined && current !== null && !guard.has(current.id)) {
+            guard.add(current.id)
+            path.push(current)
+            current = index.byId.get(current.parentId)
+          }
+          path.reverse()
+          for (const node of path) activePath.add(node.id)
+          let turnsAfter = 0
+          for (let i = path.length - 1; i >= 0; i -= 1) {
+            const node = path[i]
+            pathAfter.set(node.id, turnsAfter)
+            if (node.kind === 'turn') turnsAfter += 1
+          }
+          const visit = (node) => {
+            let best = 0
+            for (const child of index.children.get(node.id) ?? []) {
+              const value = (child.kind === 'turn' ? 1 : 0) + visit(child)
+              if (value > best) best = value
+            }
+            maxAfter.set(node.id, best)
+            return best
+          }
+          for (const root of index.roots) visit(root)
+        }
+        return { pathAfter, maxAfter, activePath }
+      }, [index, activeLeafId])
+
+      const afterFor = (node) => {
+        if (afterInfo.activePath.has(node.id)) {
+          return { n: afterInfo.pathAfter.get(node.id) ?? 0, onPath: true }
+        }
+        return { n: afterInfo.maxAfter.get(node.id) ?? 0, onPath: false }
+      }
+
       useEffect(() => {
         if (selectionIntent === null) setSelectedId(null)
       }, [sessionId])
@@ -873,6 +1195,7 @@ window.__ModuleLoader__.load({
         const isRoot = node.kind === 'root'
         const isLeaf = index.leaves.get(node.sessionId)?.id === node.id
         const onPath = selectedPath.has(node.id)
+        const after = afterFor(node)
         return h('div', { key: node.id, className: 'tc-branch' },
           isRoot
             ? h('div', { className: 'tc-root' },
@@ -914,6 +1237,8 @@ window.__ModuleLoader__.load({
                   onFork: forkFromNode,
                   onRename: rename,
                   onArchive: archiveBranch,
+                  after: after.n,
+                  afterOnPath: after.onPath,
                 })),
           children.length === 0 || collapsedNow
             ? null
@@ -1141,17 +1466,39 @@ window.__ModuleLoader__.load({
 .tc-card--active:hover{background:color-mix(in srgb, var(--dsw-alias-state-business-primary) 10%, var(--dsw-alias-bg-layer-1));border-color:var(--dsw-alias-state-business-primary)}
 .tc-card--running{opacity:.85}
 .tc-card--busy{cursor:progress}
+.tc-card-body{display:flex;align-items:stretch;gap:8px;min-width:0}
+.tc-card-main{display:flex;flex-direction:column;gap:3px;min-width:0;flex:1 1 auto}
+.tc-status{flex:0 0 64px;width:64px;min-width:64px;box-sizing:border-box;display:flex;flex-direction:column;justify-content:center;gap:4px;padding-left:7px;border-left:1px solid var(--dsw-alias-border-l1);color:var(--dsw-alias-label-tertiary)}
+.tc-ctx{display:flex;flex-direction:column;gap:2px;min-width:0}
+.tc-ctx-top{display:flex;align-items:baseline;justify-content:space-between;gap:2px;font-size:9px;line-height:1.2}
+.tc-ctx-label{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.tc-ctx-pct{font-variant-numeric:tabular-nums;color:var(--dsw-alias-label-secondary);font-weight:600}
+.tc-ctx-bar{height:3px;border-radius:2px;background:var(--dsw-alias-border-l1);overflow:hidden}
+.tc-ctx-bar > span{display:block;height:100%;border-radius:2px;background:var(--dsw-alias-state-business-primary,#4d6bfe);transition:width .2s}
+.tc-ctx-bar--warn > span{background:var(--dsw-alias-state-warn-primary,#d97706)}
+.tc-ctx-bar--error > span{background:var(--dsw-alias-state-error-primary,#dc2626)}
+.tc-after{font-size:9px;line-height:1.2;white-space:nowrap;font-variant-numeric:tabular-nums;color:var(--dsw-alias-label-tertiary)}
+.tc-after--none{opacity:.55}
 .tc-card-head{display:flex;align-items:flex-start;gap:6px}
 .tc-card-label{flex:1;min-width:0;font-weight:500;font-size:12px;overflow:hidden;text-overflow:ellipsis;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;word-break:break-word}
 .tc-card-label-text{pointer-events:none}
-.tc-card-badges{display:inline-flex;flex-wrap:wrap;gap:3px;justify-content:flex-end;max-width:52%}
+.tc-card-badges{display:flex;flex-wrap:wrap;gap:3px;justify-content:flex-start;max-width:100%;margin-top:1px}
 .tc-badge{padding:0 4px;border-radius:4px;border:1px solid var(--dsw-alias-border-l1);color:var(--dsw-alias-label-tertiary);font-size:10px;line-height:15px;white-space:nowrap}
 .tc-badge--here{color:var(--dsw-alias-state-success-primary);border-color:var(--dsw-alias-state-success-primary);font-weight:600}
 .tc-badge--running{color:var(--dsw-alias-state-ongoing,var(--dsw-alias-state-success-primary));border-color:var(--dsw-alias-state-success-primary)}
 .tc-badge--open{color:var(--dsw-alias-state-warn-label);border-color:var(--dsw-alias-state-warn-primary)}
-.tc-card-answer{margin-top:3px;color:var(--dsw-alias-label-tertiary);font-size:11px;overflow:hidden;text-overflow:ellipsis;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;word-break:break-word}
-.tc-card-actions{display:flex;flex-wrap:wrap;gap:6px;margin-top:5px;opacity:.78;transition:opacity .12s}
-.tc-card:hover .tc-card-actions,.tc-card:focus-within .tc-card-actions,.tc-card--active .tc-card-actions{opacity:1}
+.tc-detail{position:fixed;z-index:2147483002;box-sizing:border-box;display:flex;flex-direction:column;gap:7px;padding:12px;border:1px solid var(--dsw-alias-border-l2);border-radius:10px;background:var(--dsw-alias-bg-base);color:var(--dsw-alias-label-primary);box-shadow:var(--dsw-elevation-panel,0 12px 36px rgba(0,0,0,.24));font-size:12px;line-height:1.45;overflow:auto;overscroll-behavior:contain;pointer-events:auto}
+.tc-detail-head{display:flex;align-items:baseline;justify-content:space-between;gap:8px;min-width:0}
+.tc-detail-title{font-size:13px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.tc-detail-name{font-size:10px;color:var(--dsw-alias-label-tertiary);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
+.tc-detail-meta{display:flex;flex-wrap:wrap;gap:4px 8px;color:var(--dsw-alias-label-tertiary);font-size:10px;line-height:1.3}
+.tc-detail-section{display:flex;flex-direction:column;gap:3px;min-width:0}
+.tc-detail-label{font-size:10px;font-weight:600;color:var(--dsw-alias-label-secondary);letter-spacing:.02em}
+.tc-detail-text{white-space:pre-wrap;word-break:break-word;overflow-wrap:anywhere;font-size:12px;line-height:1.5;color:var(--dsw-alias-label-primary)}
+.tc-detail-loading,.tc-detail-note{color:var(--dsw-alias-label-tertiary);font-size:11px}
+.tc-detail-error{color:var(--dsw-alias-state-error-primary);font-size:11px}
+.tc-detail-note{font-size:10px}
+.tc-detail-actions{display:flex;flex-wrap:wrap;gap:6px;margin-top:2px;padding-top:8px;border-top:1px solid var(--dsw-alias-border-l1)}
 .tc-card-rail{position:absolute;left:0;top:0;bottom:0;width:26px;display:flex;align-items:center;justify-content:center;padding:0;border:0;border-right:1px solid var(--dsw-alias-border-l2);background:transparent;color:var(--dsw-alias-label-tertiary);font:inherit;cursor:pointer;transition:background-color .12s,color .12s}
 .tc-card-rail:hover{background:rgba(0,0,0,.12);color:var(--dsw-alias-label-primary)}
 .tc-card-rail--empty{cursor:default;pointer-events:none;background:transparent;border-right-color:transparent}

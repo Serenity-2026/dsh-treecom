@@ -24,6 +24,7 @@ const ROUTE = '/treecom'
 const STATE_VERSION = 1
 const SNAPSHOT_TTL_MS = 15_000
 const LABEL_LIMIT = 120
+const DETAIL_LIMIT = 24_000
 
 export const name = 'treecom'
 export const inject = ['webServer', 'sessionQuery', 'sessions']
@@ -65,6 +66,20 @@ async function handle(ctx, request, response) {
           return current
         })
         respond(response, 200, { ok: true, labels: state.labels })
+        return
+      }
+      if (body !== null && typeof body === 'object' && body.action === 'detail') {
+        const nodeId = typeof body.nodeId === 'string' ? body.nodeId : ''
+        if (nodeId.length === 0) {
+          respond(response, 400, { error: 'nodeId 必须是非空字符串' })
+          return
+        }
+        const detail = await buildDetail(ctx, nodeId)
+        if (detail === null) {
+          respond(response, 404, { error: '找不到这个节点' })
+          return
+        }
+        respond(response, 200, { ok: true, detail })
         return
       }
       respond(response, 400, { error: '未知操作' })
@@ -184,12 +199,25 @@ async function buildTree(ctx, sessionId) {
           label: turn.prompt === '' ? `第 ${turn.turn} 轮` : turn.prompt,
           prompt: turn.prompt,
           answer: turn.answer,
+          contextTokens: turn.contextTokens ?? 0,
+          contextWindow: turn.contextWindow ?? 0,
           time: turn.time,
           order: turn.startSeq,
           ...turn.open === true ? { open: true } : {},
         }
         nodes.push(node)
         nodeById.set(nodeId, node)
+      } else {
+        // A running turn keeps growing; refresh the mutable fields instead of
+        // freezing the first snapshot the panel happened to see.
+        node.endSeq = turn.endSeq
+        node.label = turn.prompt === '' ? `第 ${turn.turn} 轮` : turn.prompt
+        node.prompt = turn.prompt
+        node.answer = turn.answer
+        node.contextTokens = turn.contextTokens ?? 0
+        node.contextWindow = turn.contextWindow ?? 0
+        node.time = turn.time
+        node.open = turn.open === true
       }
       previousId = nodeId
     }
@@ -328,6 +356,8 @@ function blankStub({ record, snapshot, nodes, byId, snapshots, rootNode }) {
     label: ownPrompt === '' ? '新分支' : ownPrompt,
     prompt: ownPrompt,
     answer: '',
+    contextTokens: parentNode.contextTokens ?? 0,
+    contextWindow: parentNode.contextWindow ?? 0,
     time: last?.time ?? record.header.createdAt,
     order: typeof last?.seq === 'number' ? last.seq : cut,
     blank: true,
@@ -351,7 +381,18 @@ function cachedTurns(sessionId, events) {
 function turnsOf(events) {
   const turns = []
   let current = null
+  let contextWindow = 0
+  let lastUsage = null
+  let lastUsageTokens = 0
   for (const event of events) {
+    if (event.type === 'request/context') {
+      const value = Number(event.data?.contextWindow)
+      if (Number.isFinite(value) && value > 0) {
+        contextWindow = value
+        if (current !== null) current.contextWindow = value
+      }
+      continue
+    }
     if (event.type === 'turn/start') {
       current = {
         turn: event.data.turn,
@@ -359,7 +400,12 @@ function turnsOf(events) {
         endSeq: null,
         time: event.time,
         prompt: '',
+        promptFull: '',
         answer: '',
+        answerFull: '',
+        usage: null,
+        contextTokens: lastUsageTokens,
+        contextWindow,
         open: true,
       }
       continue
@@ -367,13 +413,25 @@ function turnsOf(events) {
     if (current === null) continue
     if (event.type === 'user/message') {
       if (current.prompt === '' && event.data?.source?.kind === 'user') {
-        current.prompt = preview(textOf(event.data.content), 140)
+        const full = rawTextOf(event.data.content)
+        current.prompt = preview(full, 140)
+        current.promptFull = limitText(full, DETAIL_LIMIT)
       }
       continue
     }
     if (event.type === 'assistant/message') {
-      const text = textOf(event.data?.message?.content)
-      if (text !== '') current.answer = preview(text, 220)
+      const usage = normalizeUsage(event.data?.usage ?? event.data?.message?.usage)
+      if (usage !== null) {
+        current.usage = usage
+        lastUsage = usage
+        lastUsageTokens = usage.totalTokens
+        current.contextTokens = usage.totalTokens
+      }
+      const full = rawTextOf(event.data?.message?.content)
+      if (full !== '') {
+        current.answer = preview(full, 220)
+        current.answerFull = limitText(full, DETAIL_LIMIT)
+      }
       continue
     }
     if (event.type === 'turn/end' && event.data?.turn === current.turn) {
@@ -388,7 +446,29 @@ function turnsOf(events) {
     current.endSeq = events.at(-1)?.seq ?? current.startSeq
     turns.push(current)
   }
+  if (contextWindow > 0) {
+    for (const turn of turns) {
+      if (!Number.isFinite(turn.contextWindow) || turn.contextWindow <= 0) turn.contextWindow = contextWindow
+    }
+  }
   return turns
+}
+
+function normalizeUsage(value) {
+  if (value === null || typeof value !== 'object') return null
+  const inputTokens = Number(value.inputTokens)
+  const outputTokens = Number(value.outputTokens)
+  const cacheReadTokens = Number(value.cacheReadTokens)
+  const cacheWriteTokens = Number(value.cacheWriteTokens ?? 0)
+  const total = Number(value.totalTokens)
+  if (![inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens].every(Number.isFinite)) return null
+  return {
+    inputTokens,
+    outputTokens,
+    cacheReadTokens,
+    cacheWriteTokens,
+    totalTokens: Number.isFinite(total) && total > 0 ? total : inputTokens + outputTokens + cacheReadTokens,
+  }
 }
 
 function firstOwnPrompt(events, cut) {
@@ -399,6 +479,113 @@ function firstOwnPrompt(events, cut) {
     if (text !== '') return text
   }
   return ''
+}
+function firstOwnPromptFull(events, cut) {
+  for (const event of events) {
+    if (event.seq < cut || event.type !== 'user/message') continue
+    if (event.data?.source?.kind !== 'user') continue
+    const text = limitText(rawTextOf(event.data.content), DETAIL_LIMIT)
+    if (text !== '') return text
+  }
+  return ''
+}
+
+async function readSessionView(ctx, sessionId) {
+  let record = null
+  try {
+    const records = await ctx.sessionQuery.listSessions()
+    record = records.find((candidate) => candidate.header.id === sessionId) ?? null
+  } catch {
+    record = null
+  }
+  if (record !== null) {
+    try {
+      return { record, snapshot: await readSnapshot(ctx, record) }
+    } catch {
+      /* fall through to the single-session read */
+    }
+  }
+  try {
+    const snapshot = await ctx.sessionQuery.readSession(sessionId)
+    return {
+      record: { header: snapshot.session, live: false, persisted: true },
+      snapshot,
+    }
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Full Q/A text for the hover card, read on demand. The tree payload only
+ * carries previews, so a long answer never inflates every poll.
+ */
+async function buildDetail(ctx, nodeId) {
+  if (nodeId.endsWith(':root')) return null
+  if (nodeId.endsWith(':blank')) {
+    const sessionId = nodeId.slice(0, -':blank'.length)
+    const view = await readSessionView(ctx, sessionId)
+    if (view === null) return null
+    const { record, snapshot } = view
+    const turns = cachedTurns(sessionId, snapshot.events)
+    const lastTurn = turns.at(-1) ?? null
+    const last = snapshot.events.at(-1)
+    const prompt = firstOwnPromptFull(snapshot.events, snapshot.inheritedEventCount)
+    return {
+      nodeId,
+      kind: 'blank',
+      sessionId,
+      turn: 0,
+      startSeq: snapshot.inheritedEventCount,
+      endSeq: typeof last?.seq === 'number' ? last.seq : snapshot.inheritedEventCount,
+      prompt,
+      answer: '',
+      time: last?.time ?? record.header.createdAt,
+      contextTokens: lastTurn?.contextTokens ?? 0,
+      contextWindow: lastTurn?.contextWindow ?? 0,
+      truncated: prompt.length >= DETAIL_LIMIT,
+    }
+  }
+  const separator = nodeId.lastIndexOf(':')
+  if (separator <= 0) return null
+  const sessionId = nodeId.slice(0, separator)
+  const startSeq = Number(nodeId.slice(separator + 1))
+  if (!Number.isSafeInteger(startSeq) || startSeq < 0) return null
+  const view = await readSessionView(ctx, sessionId)
+  if (view === null) return null
+  const turns = cachedTurns(sessionId, view.snapshot.events)
+  const turn = turns.find((candidate) => candidate.startSeq === startSeq)
+  if (turn === undefined) return null
+  const prompt = turn.promptFull === '' ? turn.prompt : turn.promptFull
+  return {
+    nodeId,
+    kind: 'turn',
+    sessionId,
+    turn: turn.turn,
+    startSeq: turn.startSeq,
+    endSeq: turn.endSeq,
+    prompt,
+    answer: turn.answerFull,
+    time: turn.time,
+    contextTokens: turn.contextTokens ?? 0,
+    contextWindow: turn.contextWindow ?? 0,
+    truncated: (turn.promptFull !== undefined && turn.promptFull.length >= DETAIL_LIMIT)
+      || (turn.answerFull !== undefined && turn.answerFull.length >= DETAIL_LIMIT),
+  }
+}
+
+function limitText(text, limit) {
+  const value = String(text).trim()
+  return value.length <= limit ? value : `${value.slice(0, limit - 1)}…`
+}
+
+function rawTextOf(content) {
+  if (!Array.isArray(content)) return ''
+  const parts = []
+  for (const block of content) {
+    if (block?.type === 'text' && typeof block.text === 'string') parts.push(block.text)
+  }
+  return parts.join('\n').trim()
 }
 
 function firstPrompt(turns) {
