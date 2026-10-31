@@ -49,6 +49,7 @@ window.__ModuleLoader__.load({
       'node.archivedToast': '已归档',
       'node.renamePlaceholder': '给这个分支起个名字',
       'node.turn': '第 {n} 轮',
+      'node.depth': '分支深度 {n}',
       'node.continueHint': '从这一轮分叉',
       'node.jumpHint': '跳转到这一轮',
       'node.collapse': '收起子节点',
@@ -99,6 +100,7 @@ window.__ModuleLoader__.load({
       'node.archivedToast': 'Archived',
       'node.renamePlaceholder': 'Name this branch',
       'node.turn': 'Turn {n}',
+      'node.depth': 'Branch depth {n}',
       'node.continueHint': 'Branch from this turn',
       'node.jumpHint': 'Jump to this turn',
       'node.collapse': 'Collapse children',
@@ -420,7 +422,7 @@ window.__ModuleLoader__.load({
     /* ------------------------------------------------------ tree card -- */
 
     function NodeCard(props) {
-      const { node, depth, activeId, onPath, isLeaf, running, busy, archived, canFork, hasChildren, collapsed, onToggle, onActivate, onFork, onRename, onArchive } = props
+      const { node, activeId, onPath, isLeaf, running, busy, archived, canFork, hasChildren, collapsed, onToggle, onActivate, onFork, onRename, onArchive } = props
       const [renaming, setRenaming] = useState(false)
       const [value, setValue] = useState(node.label)
       const cancelled = useRef(false)
@@ -469,7 +471,7 @@ window.__ModuleLoader__.load({
 
       return h('div', {
         className: classes,
-        style: { marginLeft: `${Math.min(depth, 6) * 12}px`, paddingLeft: '34px' },
+        style: { paddingLeft: '34px' },
         role: 'treeitem',
         tabIndex: 0,
         'aria-label': node.label,
@@ -890,24 +892,29 @@ window.__ModuleLoader__.load({
                 h('span', { className: 'tc-root-mark' }, h(Icon, { name: 'tree', size: 13 })),
                 h('span', { className: 'tc-root-title' }, translate('path.root')),
                 collapsedNow ? h('span', { className: 'tc-badge tc-badge--collapsed' }, translate('node.collapsed')) : null)
-            : h(NodeCard, {
-                node: { ...node, label: labelOf(node) },
-                depth,
-                activeId: effectiveSelectedId,
-                onPath,
-                isLeaf,
-                running: index.sessionById.get(node.sessionId)?.running === true,
-                archived: archivedIds.has(node.sessionId),
-                canFork,
-                hasChildren,
-                collapsed: collapsedNow,
-                busy,
-                onToggle: toggleCollapsed,
-                onActivate: activate,
-                onFork: forkFromNode,
-                onRename: rename,
-                onArchive: archiveBranch,
-              }),
+            : h('div', { className: 'tc-row' },
+                h('div', {
+                  className: `tc-gutter${onPath ? ' tc-gutter--path' : ''}${node.id === effectiveSelectedId ? ' tc-gutter--active' : ''}`,
+                  title: fmt(translate('node.depth'), { n: depth }),
+                  'aria-hidden': 'true',
+                }, h('span', { className: 'tc-depth' }, depth === 0 ? '·' : String(depth))),
+                h(NodeCard, {
+                  node: { ...node, label: labelOf(node) },
+                  activeId: effectiveSelectedId,
+                  onPath,
+                  isLeaf,
+                  running: index.sessionById.get(node.sessionId)?.running === true,
+                  archived: archivedIds.has(node.sessionId),
+                  canFork,
+                  hasChildren,
+                  collapsed: collapsedNow,
+                  busy,
+                  onToggle: toggleCollapsed,
+                  onActivate: activate,
+                  onFork: forkFromNode,
+                  onRename: rename,
+                  onArchive: archiveBranch,
+                })),
           children.length === 0 || collapsedNow
             ? null
             : h('div', { className: `tc-children${children.length > 1 ? ' tc-children--fork' : ''}` },
@@ -1108,10 +1115,18 @@ window.__ModuleLoader__.load({
 .tc-notice--busy{border-color:var(--dsw-alias-border-l2);color:var(--dsw-alias-label-secondary)}
 .tc-warn{margin:8px 12px 0;color:var(--dsw-alias-state-warn-label);font-size:11px}
 .tc-branch{min-width:0}
-/* The card's own marginLeft carries branch depth. Indenting every nested
-   .tc-children as well would shrink a long linear conversation on each turn. */
-.tc-children{margin-left:0;padding-left:0;border-left:1px dashed var(--dsw-alias-border-l1)}
-.tc-children--fork{border-left-color:var(--dsw-alias-border-l2)}
+/* Every card stays full width; hierarchy lives in a fixed-width left gutter.
+   A long linear conversation therefore never loses horizontal room. */
+.tc-children{min-width:0}
+.tc-row{display:flex;align-items:stretch;gap:6px;min-width:0}
+.tc-row > .tc-card{flex:1 1 0%;min-width:0;box-sizing:border-box}
+.tc-gutter{position:relative;flex:0 0 22px;min-width:22px;display:flex;align-items:flex-start;justify-content:center;pointer-events:none}
+.tc-gutter::before{content:"";position:absolute;top:0;bottom:0;left:10px;width:1px;background:var(--dsw-alias-border-l1)}
+.tc-gutter--path::before{background:color-mix(in srgb,var(--dsw-alias-state-business-primary) 45%,var(--dsw-alias-border-l1))}
+.tc-gutter--active::before{background:var(--dsw-alias-state-business-primary)}
+.tc-depth{position:relative;z-index:1;margin-top:7px;display:inline-flex;align-items:center;justify-content:center;min-width:16px;height:16px;padding:0 3px;border:1px solid var(--dsw-alias-border-l2);border-radius:8px;background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-tertiary);font-size:9px;line-height:1;box-sizing:border-box}
+.tc-gutter--path .tc-depth{color:var(--dsw-alias-state-business-primary);border-color:var(--dsw-alias-state-business-primary);background:color-mix(in srgb,var(--dsw-alias-state-business-primary) 8%,var(--dsw-alias-bg-layer-1))}
+.tc-gutter--active .tc-depth{color:var(--dsw-alias-state-business-primary);border-color:var(--dsw-alias-state-business-primary);background:color-mix(in srgb,var(--dsw-alias-state-business-primary) 14%,var(--dsw-alias-bg-layer-1))}
 .tc-root{display:flex;align-items:center;gap:6px;padding:4px 4px 6px 2px;color:var(--dsw-alias-label-tertiary);font-size:11px;min-width:0}
 .tc-root-mark{display:inline-flex}
 .tc-root-title{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}

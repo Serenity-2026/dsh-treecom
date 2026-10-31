@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Full-width tree cards with a fixed left depth gutter; long conversations no longer narrow with depth.
+
 ## 0.1.0 — 2026-10-31
 
 - Initial public release.
