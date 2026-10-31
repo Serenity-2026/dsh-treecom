@@ -2333,6 +2333,54 @@ window.__ModuleLoader__.load({
         }
       }, [state.open, composerOpen])
 
+      // The composer lives in the conversation tree, not inside this overlay.
+      // Hide it by element identity as well as by CSS: themes can portal the
+      // editor into a different DOM root, where a body-level selector misses it.
+      useEffect(() => {
+        if (!state.open || composerOpen) return undefined
+        const selector = '[data-composer-seat],[data-conversation-region="composer"],[data-composer-card],[data-composer-input],[data-composer-dock],[data-composer-overlay],[data-conversation-composer-overlay],[contenteditable="true"],textarea'
+        const hidden = new Map()
+        const hide = (element) => {
+          if (!(element instanceof HTMLElement) || element.closest('.tc-overlay-panel') !== null) return
+          if (hidden.has(element)) return
+          hidden.set(element, element.style.display)
+          element.style.setProperty('display', 'none', 'important')
+        }
+        const apply = () => {
+          const matches = []
+          const visit = (root) => {
+            for (const element of root.querySelectorAll('*')) {
+              if (element.shadowRoot !== null) visit(element.shadowRoot)
+              if (element.matches(selector)) matches.push(element)
+            }
+          }
+          visit(document)
+          for (const element of matches) {
+            const container = element.closest('[data-composer-card],[data-composer-seat],[data-composer-dock],[data-composer-overlay],[data-conversation-region="composer"],[class*="composer" i]')
+            hide(container === document.body || container === document.documentElement ? element : (container ?? element))
+          }
+        }
+        apply()
+        let frame = 0
+        const observer = new MutationObserver(() => {
+          if (frame !== 0) return
+          frame = requestAnimationFrame(() => {
+            frame = 0
+            apply()
+          })
+        })
+        observer.observe(document.body, { childList: true, subtree: true })
+        return () => {
+          observer.disconnect()
+          if (frame !== 0) cancelAnimationFrame(frame)
+          for (const [element, value] of hidden) {
+            if (!element.isConnected) continue
+            if (value === '') element.style.removeProperty('display')
+            else element.style.setProperty('display', value)
+          }
+        }
+      }, [state.open, composerOpen])
+
       const startResize = (event) => {
         event.preventDefault()
         event.stopPropagation()
@@ -2557,7 +2605,7 @@ window.__ModuleLoader__.load({
 .tc-branch-action:disabled{opacity:.45;cursor:not-allowed}
 .tc-action-error{margin-left:2px;color:var(--dsw-alias-state-error-primary);font-weight:700;cursor:help}
 .tc-overlay{position:fixed;inset:0;z-index:2147483000;display:flex;justify-content:flex-end;pointer-events:none}
-body.tc-overlay-open:not(.tc-overlay-composer) [data-composer-seat],body.tc-overlay-open:not(.tc-overlay-composer) [data-conversation-region="composer"],body.tc-overlay-open:not(.tc-overlay-composer) [data-composer-card],body.tc-overlay-open:not(.tc-overlay-composer) [data-composer-input],body.tc-overlay-open:not(.tc-overlay-composer) [data-composer-dock],body.tc-overlay-open:not(.tc-overlay-composer) [data-composer-overlay],body.tc-overlay-open:not(.tc-overlay-composer) [data-conversation-composer-overlay]{display:none!important}
+body.tc-overlay-open:not(.tc-overlay-composer) [data-composer-seat],body.tc-overlay-open:not(.tc-overlay-composer) [data-conversation-region="composer"],body.tc-overlay-open:not(.tc-overlay-composer) [data-composer-card],body.tc-overlay-open:not(.tc-overlay-composer) [data-composer-input],body.tc-overlay-open:not(.tc-overlay-composer) [data-composer-dock],body.tc-overlay-open:not(.tc-overlay-composer) [data-composer-overlay],body.tc-overlay-open:not(.tc-overlay-composer) [data-conversation-composer-overlay]{display:none!important},body.tc-overlay-open:not(.tc-overlay-composer) [contenteditable="true"],body.tc-overlay-open:not(.tc-overlay-composer) textarea{display:none!important}
 .tc-overlay-panel{position:relative;pointer-events:auto;max-width:92vw;height:100%;display:flex;flex-direction:column;background:var(--dsw-alias-bg-base);border-left:1px solid var(--dsw-alias-border-l1);box-shadow:-12px 0 32px rgba(0,0,0,.18);will-change:transform;animation:tc-overlay-in .24s cubic-bezier(.22,1,.36,1)}
 body.tc-overlay-composer .tc-overlay-panel{height:calc(100% - 116px)}
 .tc-overlay-panel--closing{animation:tc-overlay-out .23s cubic-bezier(.4,0,.2,1) forwards;pointer-events:none}
