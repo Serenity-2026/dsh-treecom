@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- The question and answer bubbles in the right detail pane now have fixed heights and scroll internally when the content is longer.
+- Hover preview uses the normal arrow over its frame and an I-beam over text, so text selection/copy is discoverable without dragging first.
+- The chain collapse control now collapses only the turns above the hovered node ("折叠上方 N 轮") instead of the whole chain.
 - Chain nodes can be collapsed again: after expanding a linear stretch, hover any node in the chain and click “折叠 N 轮” in the preview.
 - Hover preview now uses a default arrow cursor, supports text selection (I-beam while dragging), and its bottom “点击查看详情” hint is clickable like the node itself.
 - Added copy buttons above the question and answer bubbles in the right detail pane, with a transient “已复制” state.

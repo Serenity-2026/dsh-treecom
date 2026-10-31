@@ -394,13 +394,18 @@ window.__ModuleLoader__.load({
       return { byId, children, leaves, leaf, path, chain, roots, sessionById }
     }
 
-    function buildDisplayIndex(index, hiddenIds, expandedChains) {
+    function buildDisplayIndex(index, hiddenIds, expandedChains, prefixCuts) {
       const display = new Map()
       const chainByRep = new Map()
       const chainByMember = new Map()
       const visibleChildren = (node) => (index.children.get(node.id) ?? []).filter((child) => hiddenIds.has(child.id) !== true)
       const addNode = (node, parentId) => {
         display.set(node.id, { ...node, parentId })
+      }
+      const markChainMembers = (members, chainInfo, expanded) => {
+        for (let i = 0; i < members.length; i += 1) {
+          chainByMember.set(members[i].id, { ...chainInfo, index: i, aboveCount: i, expanded, prefix: false })
+        }
       }
       const addSubtree = (node, parentId) => {
         const children = visibleChildren(node)
@@ -412,12 +417,48 @@ window.__ModuleLoader__.load({
             members.push(current)
           }
           const key = `${members[0].id}~${current.id}`
-          const chainInfo = { key, count: members.length, startId: members[0].id, endId: current.id }
-          if (expandedChains.has(key) !== true) {
+          const chainInfo = {
+            key,
+            count: members.length,
+            startId: members[0].id,
+            endId: current.id,
+            members: members.map((member) => member.id),
+          }
+          const expanded = expandedChains.has(key) === true
+          if (!expanded) {
             addNode(current, parentId)
+            chainByRep.set(current.id, { ...chainInfo, expanded: false, prefix: false })
+            markChainMembers(members, chainInfo, false)
             for (const child of visibleChildren(current)) addSubtree(child, current.id)
-            chainByRep.set(current.id, chainInfo)
-            for (const member of members) chainByMember.set(member.id, { ...chainInfo, expanded: false })
+            return
+          }
+          const rawCut = prefixCuts?.[key] ?? 0
+          const cut = Number.isInteger(rawCut) ? Math.max(0, Math.min(members.length, rawCut)) : 0
+          if (cut > 0 && cut < members.length) {
+            const prefixMembers = members.slice(0, cut)
+            const representative = prefixMembers[prefixMembers.length - 1]
+            const prefixInfo = {
+              key,
+              count: prefixMembers.length,
+              startId: prefixMembers[0].id,
+              endId: representative.id,
+              members: prefixMembers.map((member) => member.id),
+              prefix: true,
+              expanded: true,
+            }
+            addNode(representative, parentId)
+            chainByRep.set(representative.id, prefixInfo)
+            for (let i = 0; i < prefixMembers.length; i += 1) {
+              chainByMember.set(prefixMembers[i].id, { ...prefixInfo, index: i, aboveCount: i })
+            }
+            let previous = representative.id
+            for (let i = cut; i < members.length; i += 1) {
+              const member = members[i]
+              addNode(member, previous)
+              chainByMember.set(member.id, { ...chainInfo, index: i, aboveCount: i, expanded: true, prefix: false })
+              previous = member.id
+            }
+            for (const child of visibleChildren(current)) addSubtree(child, current.id)
             return
           }
           let previous = parentId
@@ -425,7 +466,7 @@ window.__ModuleLoader__.load({
             addNode(member, previous)
             previous = member.id
           }
-          for (const member of members) chainByMember.set(member.id, { ...chainInfo, expanded: true })
+          markChainMembers(members, chainInfo, true)
           for (const child of visibleChildren(current)) addSubtree(child, current.id)
           return
         }
@@ -1478,13 +1519,17 @@ window.__ModuleLoader__.load({
             h('span', { className: 'tc-tip-turn' }, tipTurn),
             tip.node.id === activeId ? h('span', { className: 'tc-tip-here' }, translate('node.youAreHere')) : null),
           tipChain !== null
-            ? (tipChain.expanded === true
-                ? h('button', {
-                    type: 'button',
-                    className: 'tc-tip-chain tc-tip-chain--action',
-                    onClick: (event) => { event.stopPropagation(); hideTipNow(); onCollapse(tipChain) },
-                  }, fmt(translate('node.chainCollapse'), { n: tipChain.count }))
-                : h('div', { className: 'tc-tip-chain' }, fmt(translate('node.chainHint'), { n: tipChain.count })))
+            ? (tipChain.prefix === true
+                ? h('div', { className: 'tc-tip-chain' }, fmt(translate('node.chainHint'), { n: tipChain.count }))
+                : tipChain.expanded === true
+                  ? (tipChain.index > 0
+                      ? h('button', {
+                          type: 'button',
+                          className: 'tc-tip-chain tc-tip-chain--action',
+                          onClick: (event) => { event.stopPropagation(); hideTipNow(); onCollapse(tipChain) },
+                        }, fmt(translate('node.chainCollapse'), { n: tipChain.index }))
+                      : null)
+                  : h('div', { className: 'tc-tip-chain' }, fmt(translate('node.chainHint'), { n: tipChain.count })))
             : null,
           h('div', { className: 'tc-tip-meta' },
             tipContext.hasContext ? `${tipContext.contextPct}%` : translate('node.contextUnknown'),
@@ -1834,6 +1879,7 @@ window.__ModuleLoader__.load({
       const [selectedId, setSelectedId] = useState(null)
       const [collapsed, setCollapsed] = useState(() => new Set())
       const [expandedChains, setExpandedChains] = useState(() => new Set())
+      const [prefixCuts, setPrefixCuts] = useState({})
       const toastTimer = useRef(null)
       const canFork = useAccess ? useAccess('session/fork') : true
       const liveArchived = useWorkspaces ? useWorkspaces(selectArchived) : null
@@ -1876,6 +1922,7 @@ window.__ModuleLoader__.load({
 
       useEffect(() => {
         setExpandedChains(new Set())
+        setPrefixCuts({})
       }, [sessionId])
 
       useEffect(() => {
@@ -2073,8 +2120,8 @@ window.__ModuleLoader__.load({
       }, [data, index, archivedIds])
 
       const displayIndex = useMemo(() => (
-        index === null ? null : buildDisplayIndex(index, hiddenIds, expandedChains)
-      ), [index, hiddenIds, expandedChains])
+        index === null ? null : buildDisplayIndex(index, hiddenIds, expandedChains, prefixCuts)
+      ), [index, hiddenIds, expandedChains, prefixCuts])
 
       const activeLeafId = index?.leaf?.id ?? null
       const effectiveSelectedId = selectedNodeId !== null && !hiddenIds.has(selectedNodeId)
@@ -2103,6 +2150,16 @@ window.__ModuleLoader__.load({
 
       const expandChain = (chain) => {
         if (chain === null || chain === undefined) return
+        setPrefixCuts((current) => {
+          if (current[chain.key] === undefined) return current
+          const next = { ...current }
+          delete next[chain.key]
+          return next
+        })
+        if (chain.prefix === true) {
+          if (chain.endId !== undefined) setSelectedId(chain.endId)
+          return
+        }
         setExpandedChains((current) => {
           if (current.has(chain.key)) return current
           const next = new Set(current)
@@ -2112,15 +2169,10 @@ window.__ModuleLoader__.load({
         if (chain.endId !== undefined) setSelectedId(chain.endId)
       }
 
-      const collapseChain = (chain) => {
+      const collapseAbove = (chain) => {
         if (chain === null || chain === undefined) return
-        setExpandedChains((current) => {
-          if (!current.has(chain.key)) return current
-          const next = new Set(current)
-          next.delete(chain.key)
-          return next
-        })
-        if (chain.endId !== undefined) setSelectedId(chain.endId)
+        if (!Number.isInteger(chain.index) || chain.index <= 0) return
+        setPrefixCuts((current) => ({ ...current, [chain.key]: chain.index }))
       }
 
       const afterInfo = useMemo(() => {
@@ -2317,7 +2369,7 @@ window.__ModuleLoader__.load({
                   chainByRep: displayIndex?.chainByRep ?? null,
                   chainByMember: displayIndex?.chainByMember ?? null,
                   onExpand: expandChain,
-                  onCollapse: collapseChain,
+                  onCollapse: collapseAbove,
                   onSelect: (node) => setSelectedId(node.id),
                   sessionId,
                 }),
@@ -2517,6 +2569,8 @@ body.tc-view-tree-open [data-composer-seat],body.tc-view-tree-open [data-convers
 .tc-sidebar-body .tc-workspace{flex-direction:column}
 .tc-sidebar-body .tc-canvas-wrap{flex:1 1 auto;min-height:240px}
 .tc-sidebar-body .tc-side{flex:0 0 46%;width:100%;max-width:none;max-height:52%;border-left:0;border-top:1px solid var(--dsw-alias-border-l1)}
+.tc-sidebar-body .tc-chat-bubble,.tc-sidebar-body .tc-chat-bubble--user{height:92px}
+.tc-sidebar-body .tc-chat-bubble--assistant{height:168px}
 .tc-toast{position:absolute;top:46px;left:50%;transform:translateX(-50%);z-index:5;padding:5px 10px;border-radius:999px;background:var(--dsw-alias-bg-layer-3);border:1px solid var(--dsw-alias-border-l2);color:var(--dsw-alias-label-primary);box-shadow:var(--dsw-elevation-panel);font-size:11px;white-space:nowrap;pointer-events:none;animation:tc-toast-in .15s ease-out}
 @keyframes tc-toast-in{from{opacity:0;transform:translate(-50%,-4px)}to{opacity:1;transform:translate(-50%,0)}}
 .tc-open-btn{display:inline-flex;align-items:center;gap:5px;height:28px;padding:0 8px;border:1px solid var(--dsw-alias-border-l1);border-radius:6px;background:transparent;color:var(--dsw-alias-label-secondary);font:inherit;font-size:12px;cursor:pointer}
@@ -2558,10 +2612,9 @@ body.tc-view-tree-open [data-composer-seat],body.tc-view-tree-open [data-convers
 .tc-tip-body{margin-top:6px;min-height:0;overflow-y:auto;overscroll-behavior:contain;display:flex;flex-direction:column;gap:7px;padding-right:2px}
 .tc-tip-section{min-width:0}
 .tc-tip-label{margin-bottom:2px;color:var(--dsw-alias-label-tertiary);font-size:10px;font-weight:600;letter-spacing:.02em}
-.tc-tip-text{white-space:pre-wrap;word-break:break-word;color:var(--dsw-alias-label-secondary);font-size:11px;line-height:1.5;cursor:default;user-select:text}
-.tc-tip-text *{cursor:default}
+.tc-tip-text{white-space:pre-wrap;word-break:break-word;color:var(--dsw-alias-label-secondary);font-size:11px;line-height:1.5;cursor:text;user-select:text}
+.tc-tip-text *{cursor:text}
 .tc-tip-text a{cursor:pointer}
-.tc-canvas-tip:active .tc-tip-text,.tc-canvas-tip:active .tc-tip-text *{cursor:text}
 .tc-tip-error{color:var(--dsw-alias-state-error-label);font-size:10px}
 .tc-tip-note{color:var(--dsw-alias-label-tertiary);font-size:10px}
 .tc-tip-meta{margin-top:5px;color:var(--dsw-alias-label-tertiary);font-size:10px;font-variant-numeric:tabular-nums}
@@ -2626,9 +2679,12 @@ body.tc-view-tree-open [data-composer-seat],body.tc-view-tree-open [data-convers
 .tc-copy-btn:hover:not(:disabled){color:var(--dsw-alias-state-business-primary);border-color:var(--dsw-alias-border-l2);background:var(--dsw-alias-bg-layer-2);opacity:1}
 .tc-copy-btn:disabled{opacity:.35;cursor:default}
 .tc-copy-btn--done{color:var(--dsw-alias-state-success-primary);border-color:var(--dsw-alias-state-success-primary);opacity:1}
-.tc-chat-bubble{padding:8px 10px;border:1px solid var(--dsw-alias-border-l1);border-radius:8px;background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-primary);font-size:12px;line-height:1.55;white-space:pre-wrap;word-break:break-word;overflow-wrap:anywhere}
+.tc-chat-bubble{height:116px;flex:0 0 auto;overflow-y:auto;overflow-x:hidden;overscroll-behavior:contain;scrollbar-width:thin;padding:8px 10px;border:1px solid var(--dsw-alias-border-l1);border-radius:8px;background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-primary);font-size:12px;line-height:1.55;white-space:pre-wrap;word-break:break-word;overflow-wrap:anywhere}
+.tc-chat-bubble--user{height:116px}
+.tc-chat-bubble::-webkit-scrollbar{width:6px}
+.tc-chat-bubble::-webkit-scrollbar-thumb{background:var(--dsw-alias-border-l2);border-radius:3px}
 .tc-chat-bubble--user{border-color:color-mix(in srgb,var(--dsw-alias-state-business-primary) 34%,var(--dsw-alias-border-l1));background:color-mix(in srgb,var(--dsw-alias-state-business-primary) 6%,var(--dsw-alias-bg-layer-1))}
-.tc-chat-bubble--assistant{background:var(--dsw-alias-bg-layer-1)}
+.tc-chat-bubble--assistant{height:220px;background:var(--dsw-alias-bg-layer-1)}
 .tc-chat-bubble--loading{color:var(--dsw-alias-label-tertiary);font-style:italic}
 .tc-side-note{color:var(--dsw-alias-label-tertiary);font-size:10px;line-height:1.45}
 .tc-side-error{padding:6px 8px;border:1px solid var(--dsw-alias-state-error-primary);border-radius:6px;color:var(--dsw-alias-state-error-primary);font-size:11px;line-height:1.45}

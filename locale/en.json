@@ -1,6 +1,7 @@
 {
   "meta": {
-    "title": "TreeCom \u2014 Conversation Tree",
+    "title": "TreeCom — Conversation Tree",
     "description": "Keeps one conversation window and manages its branches as a tree: branch from any completed turn, jump back to a node, rename branches, all without opening a new conversation."
-  }
+  },
+  "node.chainCollapse": "Collapse {n} above"
 }

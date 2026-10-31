@@ -1,6 +1,7 @@
 {
   "meta": {
-    "title": "TreeCom \u2014 \u5bf9\u8bdd\u6811",
-    "description": "\u53ea\u4fdd\u7559\u4e00\u4e2a\u5bf9\u8bdd\u7a97\u53e3\uff0c\u7528\u4e00\u68f5\u6811\u7ba1\u7406\u5b83\u7684\u5206\u652f\uff1a\u4ece\u4efb\u4e00\u8f6e\u5206\u53c9\uff0c\u70b9\u8282\u70b9\u56de\u5230\u90a3\u4e00\u8f6e\u7ee7\u7eed\uff0c\u4e5f\u80fd\u7ed9\u5206\u652f\u6539\u540d\uff0c\u4e0d\u9700\u8981\u65b0\u5f00\u5bf9\u8bdd\u3002"
-  }
+    "title": "TreeCom — 对话树",
+    "description": "只保留一个对话窗口，用一棵树管理它的分支：从任一轮分叉，点节点回到那一轮继续，也能给分支改名，不需要新开对话。"
+  },
+  "node.chainCollapse": "折叠上方 {n} 轮"
 }
