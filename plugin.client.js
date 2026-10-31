@@ -26,9 +26,7 @@ window.__ModuleLoader__.load({
     const ROUTE = '/treecom'
     const NS = 'treecom'
     const VIEW_ID = 'treecom'
-    const CACHE_MS = 4_000
-    const WIDTH_KEY = 'treecom:width'
-    const REFRESH_MS = 8_000
+    const WIDTH_KEY = 'treecom:width:v2'
     const DETAIL_CACHE_MS = 10_000
 
     /* --------------------------------------------------------- locale -- */
@@ -86,6 +84,8 @@ window.__ModuleLoader__.load({
       'node.selectHint': '点击树上的节点查看详情',
       'node.rootDetail': '这是这段对话的起点。',
       'node.hoverHint': '点击查看详情',
+      'node.chainHint': '连续 {n} 轮 · 点击展开',
+      'node.chainAria': '连续 {n} 轮，点击展开',
       'panel.resize': '拖动调整宽度',
       'node.leafHint': '切到这条分支',
       'action.branch': '分叉',
@@ -159,6 +159,8 @@ window.__ModuleLoader__.load({
       'node.selectHint': 'Click a node in the tree to see its details',
       'node.rootDetail': 'This is where the conversation starts.',
       'node.hoverHint': 'Click for details',
+      'node.chainHint': '{n} turns · click to expand',
+      'node.chainAria': '{n} consecutive turns; click to expand',
       'panel.resize': 'Drag to resize',
       'node.leafHint': 'Switch to this branch',
       'action.branch': 'Branch',
@@ -225,11 +227,12 @@ window.__ModuleLoader__.load({
 
     /* ----------------------------------------------------------- data -- */
 
-    const cache = new Map()
+    const inflight = new Map()
+    const treeDataCache = new Map()
 
-    function fetchTree(sessionId, force) {
-      const cached = cache.get(sessionId)
-      if (!force && cached !== undefined && Date.now() - cached.at < CACHE_MS) return cached.promise
+    function fetchTree(sessionId) {
+      const existing = inflight.get(sessionId)
+      if (existing !== undefined) return existing
       const promise = (async () => {
         const response = await fetch(`${ROUTE}?sessionId=${encodeURIComponent(sessionId)}`, { cache: 'no-store' })
         const body = await response.json().catch(() => null)
@@ -238,13 +241,15 @@ window.__ModuleLoader__.load({
         }
         return body
       })()
-      cache.set(sessionId, { at: Date.now(), promise })
-      promise.catch(() => cache.delete(sessionId))
+      inflight.set(sessionId, promise)
+      promise.finally(() => {
+        if (inflight.get(sessionId) === promise) inflight.delete(sessionId)
+      }).catch(() => {})
       return promise
     }
 
     function refreshAll() {
-      cache.clear()
+      treeDataCache.clear()
       try {
         window.dispatchEvent(new Event('treecom:refresh'))
       } catch {
@@ -252,35 +257,77 @@ window.__ModuleLoader__.load({
       }
     }
 
-    function useTree(sessionId) {
-      const [state, setState] = useState({ loading: true, data: null, error: null })
+    function sessionRevision(sessions) {
+      if (sessions === null || sessions === undefined) return null
+      const values = sessions instanceof Map ? [...sessions.values()] : Object.values(sessions)
+      const parts = []
+      for (const session of values) {
+        if (session === null || session === undefined) continue
+        const id = String(session.id ?? '')
+        if (session.running === true) parts.push(`${id}:running`)
+        else parts.push(`${id}:${session.updatedAt ?? ''}:${session.title ?? ''}:${session.blank === true ? 'blank' : ''}`)
+      }
+      parts.sort()
+      return parts.join('|')
+    }
+
+    function useTree(sessionId, liveRevision, liveRunning) {
+      const cachedAtMount = treeDataCache.get(sessionId)
+      const [state, setState] = useState(cachedAtMount !== undefined
+        ? { sessionId, loading: false, data: cachedAtMount.data, error: null }
+        : { sessionId, loading: true, data: null, error: null })
       const generation = useRef(0)
-      const reload = useCallback(async (force = true) => {
+      const revisionRef = useRef(liveRevision)
+      useEffect(() => {
+        revisionRef.current = liveRevision
+      }, [liveRevision])
+      const reload = useCallback(async () => {
         const token = generation.current
         try {
-          const data = await fetchTree(sessionId, force)
-          if (generation.current === token) setState({ loading: false, data, error: null })
+          const data = await fetchTree(sessionId)
+          treeDataCache.set(sessionId, { data, revision: revisionRef.current })
+          if (generation.current === token) setState({ sessionId, loading: false, data, error: null })
           return data
         } catch (error) {
           if (generation.current === token) {
-            setState((previous) => ({ loading: false, data: previous.data, error: error.message }))
+            setState((previous) => ({
+              sessionId,
+              loading: false,
+              data: previous.sessionId === sessionId ? previous.data : (treeDataCache.get(sessionId)?.data ?? null),
+              error: noticeText(error),
+            }))
           }
           throw error
         }
       }, [sessionId])
       useEffect(() => {
         generation.current += 1
-        reload(false).catch(() => {})
-        const timer = setInterval(() => { reload(true).catch(() => {}) }, REFRESH_MS)
-        const onRefresh = () => { reload(true).catch(() => {}) }
+        const cached = treeDataCache.get(sessionId)
+        if (cached !== undefined) {
+          setState({ sessionId, loading: false, data: cached.data, error: null })
+          if (liveRevision !== null && liveRevision !== undefined && cached.revision !== liveRevision) {
+            reload().catch(() => {})
+          }
+        } else {
+          reload().catch(() => {})
+        }
+        const onRefresh = () => { reload().catch(() => {}) }
         window.addEventListener('treecom:refresh', onRefresh)
+        const runningTimer = liveRunning === true
+          ? setInterval(() => { reload().catch(() => {}) }, 5_000)
+          : null
         return () => {
           generation.current += 1
-          clearInterval(timer)
           window.removeEventListener('treecom:refresh', onRefresh)
+          if (runningTimer !== null) clearInterval(runningTimer)
         }
-      }, [reload])
-      return { ...state, reload }
+      }, [sessionId, liveRevision, liveRunning, reload])
+      const visible = state.sessionId === sessionId
+        ? state
+        : (cachedAtMount !== undefined
+            ? { sessionId, loading: false, data: cachedAtMount.data, error: null }
+            : { sessionId, loading: true, data: null, error: null })
+      return { ...visible, reload }
     }
 
     function indexOf(data) {
@@ -314,6 +361,77 @@ window.__ModuleLoader__.load({
       const roots = data.nodes.filter((node) => node.parentId === null || node.parentId === undefined)
       const sessionById = new Map(data.sessions.map((session) => [session.id, session]))
       return { byId, children, leaves, leaf, path, chain, roots, sessionById }
+    }
+
+    function buildDisplayIndex(index, hiddenIds, expandedChains) {
+      const display = new Map()
+      const chainByRep = new Map()
+      const chainByMember = new Map()
+      const visibleChildren = (node) => (index.children.get(node.id) ?? []).filter((child) => hiddenIds.has(child.id) !== true)
+      const addNode = (node, parentId) => {
+        display.set(node.id, { ...node, parentId })
+      }
+      const addSubtree = (node, parentId) => {
+        const children = visibleChildren(node)
+        if (node.kind !== 'root' && children.length === 1) {
+          const members = [node]
+          let current = node
+          while (visibleChildren(current).length === 1) {
+            current = visibleChildren(current)[0]
+            members.push(current)
+          }
+          const key = `${members[0].id}~${current.id}`
+          if (expandedChains.has(key) !== true) {
+            addNode(current, parentId)
+            for (const child of visibleChildren(current)) addSubtree(child, current.id)
+            chainByRep.set(current.id, { key, count: members.length, startId: members[0].id, endId: current.id })
+            for (const member of members.slice(0, -1)) chainByMember.set(member.id, current.id)
+            return
+          }
+          let previous = parentId
+          for (const member of members) {
+            addNode(member, previous)
+            previous = member.id
+          }
+          for (const child of visibleChildren(current)) addSubtree(child, current.id)
+          return
+        }
+        addNode(node, parentId)
+        for (const child of children) addSubtree(child, node.id)
+      }
+      for (const root of index.roots) {
+        if (hiddenIds.has(root.id)) continue
+        addSubtree(root, root.parentId ?? null)
+      }
+      const byId = new Map(display)
+      const children = new Map()
+      for (const node of display.values()) {
+        if (node.parentId === null || node.parentId === undefined) continue
+        const list = children.get(node.parentId) ?? []
+        list.push(node)
+        children.set(node.parentId, list)
+      }
+      for (const list of children.values()) list.sort((a, b) => (a.order ?? 0) - (b.order ?? 0))
+      const leaves = new Map()
+      for (const node of display.values()) {
+        if (node.kind === 'root') continue
+        const previous = leaves.get(node.sessionId)
+        if (previous === undefined || (node.order ?? 0) >= (previous.order ?? 0)) leaves.set(node.sessionId, node)
+      }
+      const sessionId = index.leaf?.sessionId ?? null
+      const leaf = sessionId === null ? null : (leaves.get(sessionId) ?? null)
+      const path = new Set()
+      const chain = []
+      const seen = new Set()
+      let cursor = leaf
+      while (cursor !== null && cursor !== undefined && !seen.has(cursor.id)) {
+        seen.add(cursor.id)
+        path.add(cursor.id)
+        chain.unshift(cursor)
+        cursor = byId.get(cursor.parentId)
+      }
+      const roots = [...display.values()].filter((node) => node.parentId === null || node.parentId === undefined)
+      return { byId, children, leaves, leaf, path, chain, roots, sessionById: index.sessionById, chainByRep, chainByMember }
     }
 
     /* -------------------------------------------------------- actions -- */
@@ -927,7 +1045,7 @@ window.__ModuleLoader__.load({
     }
 
     function TreeCanvas(props) {
-      const { index, hiddenIds, selectedId, activeId, selectedPath, afterFor, onSelect, sessionId } = props
+      const { index, hiddenIds, selectedId, activeId, selectedPath, afterFor, chainByRep, onExpand, onSelect, sessionId } = props
       const layout = useMemo(() => layoutTree(index, hiddenIds), [index, hiddenIds])
       const wrapRef = useRef(null)
       const [pan, setPan] = useState({ x: 0, y: 0 })
@@ -1057,10 +1175,12 @@ window.__ModuleLoader__.load({
       for (const [id, position] of layout.positions) {
         const node = index.byId.get(id)
         if (node === undefined) continue
+        const chain = chainByRep?.get(id) ?? null
         const classes = [
           'tc-canvas-node',
           node.kind === 'root' ? 'tc-canvas-node--root' : '',
           node.kind === 'blank' ? 'tc-canvas-node--blank' : '',
+          chain !== null ? 'tc-canvas-node--collapsed' : '',
           id === selectedId ? 'tc-canvas-node--selected' : '',
           id === activeId ? 'tc-canvas-node--active' : '',
           selectedPath.has(id) ? 'tc-canvas-node--path' : '',
@@ -1072,18 +1192,22 @@ window.__ModuleLoader__.load({
           type: 'button',
           className: classes,
           style: { left: `${position.x}px`, top: `${position.y}px` },
-          'aria-label': node.kind === 'root' ? translate('path.root') : question,
+          'aria-label': chain !== null
+            ? fmt(translate('node.chainAria'), { n: chain.count })
+            : (node.kind === 'root' ? translate('path.root') : question),
           onClick: (event) => {
             event.stopPropagation()
             if (suppressClick.current) return
             setTip(null)
-            onSelect(node)
+            if (chain !== null) onExpand(chain)
+            else onSelect(node)
           },
           onPointerDown: (event) => event.stopPropagation(),
           onMouseEnter: (event) => showTip(node, event.currentTarget),
           onMouseLeave: () => setTip(null),
         },
-          h('span', { className: 'tc-canvas-node-halo', 'aria-hidden': 'true' }),
+          h('span', { className: 'tc-canvas-node-halo', 'aria-hidden': 'true' },
+            chain !== null ? h('span', { className: 'tc-canvas-node-count' }, String(chain.count)) : null),
           h('span', { className: 'tc-canvas-node-dot' }, node.kind === 'root' ? h(Icon, { name: 'tree', size: 11 }) : null)))
       }
 
@@ -1102,6 +1226,7 @@ window.__ModuleLoader__.load({
 
       let tipElement = null
       if (tip !== null) {
+        const tipChain = chainByRep?.get(tip.node.id) ?? null
         const tipContext = contextInfo(tip.node)
         const tipTurn = tip.node.kind === 'root'
           ? translate('path.root')
@@ -1120,6 +1245,7 @@ window.__ModuleLoader__.load({
             h('span', { className: 'tc-tip-turn' }, tipTurn),
             tip.node.id === activeId ? h('span', { className: 'tc-tip-here' }, translate('node.youAreHere')) : null),
           h('div', { className: 'tc-tip-q' }, tip.node.prompt || tip.node.label || translate('node.blank')),
+          tipChain !== null ? h('div', { className: 'tc-tip-chain' }, fmt(translate('node.chainHint'), { n: tipChain.count })) : null,
           h('div', { className: 'tc-tip-meta' },
             tipContext.hasContext ? `${tipContext.contextPct}%` : translate('node.contextUnknown'),
             ' · ',
@@ -1369,7 +1495,8 @@ window.__ModuleLoader__.load({
           isLeaf && node.label !== '' && node.label !== title
             ? h('div', { className: 'tc-side-sub' }, node.label)
             : null,
-          badges.length > 0 ? h('div', { className: 'tc-side-badges' }, badges) : null),
+          badges.length > 0 ? h('div', { className: 'tc-side-badges' }, badges) : null,
+          actions.length > 0 ? h('div', { className: 'tc-side-actions tc-side-actions--head' }, actions) : null),
         h('div', { ref: bodyRef, className: 'tc-side-body' },
           h('div', { className: 'tc-side-stats' },
             h('div', { className: 'tc-side-stat' },
@@ -1393,15 +1520,13 @@ window.__ModuleLoader__.load({
                 h('div', { className: 'tc-chat-label' }, translate('node.answerLabel')),
                 h('div', { className: `tc-chat-bubble tc-chat-bubble--assistant${loading ? ' tc-chat-bubble--loading' : ''}` }, answerText),
                 detail?.truncated === true ? h('div', { className: 'tc-side-note' }, translate('node.detailTruncated')) : null,
-                detail?.time ? h('div', { className: 'tc-side-note' }, formatTime(detail.time)) : null)),
-        actions.length > 0 ? h('div', { className: 'tc-side-actions' }, actions) : null)
+                detail?.time ? h('div', { className: 'tc-side-note' }, formatTime(detail.time)) : null)))
     }
 
     /* ---------------------------------------------------------- panel -- */
 
     function TreePanel(props) {
       const { sessionId, variant, useAccess, useSession, useWorkspaces, useSessions } = props
-      const { data, error, reload } = useTree(sessionId)
       const [busy, setBusy] = useState(false)
       const [notice, setNotice] = useState(null)
       const [overrides, setOverrides] = useState({})
@@ -1409,11 +1534,14 @@ window.__ModuleLoader__.load({
       const [toast, setToast] = useState(null)
       const [selectedId, setSelectedId] = useState(null)
       const [collapsed, setCollapsed] = useState(() => new Set())
+      const [expandedChains, setExpandedChains] = useState(() => new Set())
       const toastTimer = useRef(null)
       const canFork = useAccess ? useAccess('session/fork') : true
       const liveArchived = useWorkspaces ? useWorkspaces(selectArchived) : null
       const liveSessions = useSessions ? useSessions(selectSessionById) : null
       const runningActive = useSession ? useSession((snapshot) => snapshot.running) : (liveSessions?.[sessionId]?.running === true)
+      const liveRevision = useMemo(() => sessionRevision(liveSessions), [liveSessions])
+      const { data, error, reload } = useTree(sessionId, liveRevision, runningActive)
       const index = useMemo(() => (data === null ? null : indexOf(data)), [data])
       const selectedNodeId = selectedId !== null && index !== null && index.byId.has(selectedId)
         ? selectedId
@@ -1446,6 +1574,10 @@ window.__ModuleLoader__.load({
         const timer = setTimeout(() => setNotice(null), 7000)
         return () => clearTimeout(timer)
       }, [notice])
+
+      useEffect(() => {
+        setExpandedChains(new Set())
+      }, [sessionId])
 
       useEffect(() => {
         setOverrides({})
@@ -1641,6 +1773,10 @@ window.__ModuleLoader__.load({
         return hidden
       }, [data, index, archivedIds])
 
+      const displayIndex = useMemo(() => (
+        index === null ? null : buildDisplayIndex(index, hiddenIds, expandedChains)
+      ), [index, hiddenIds, expandedChains])
+
       const activeLeafId = index?.leaf?.id ?? null
       const effectiveSelectedId = selectedNodeId !== null && !hiddenIds.has(selectedNodeId)
         ? selectedNodeId
@@ -1657,6 +1793,25 @@ window.__ModuleLoader__.load({
         }
         return path
       }, [index, effectiveSelectedId])
+
+      const resolveDisplayId = (id) => {
+        if (displayIndex === null || id === null) return null
+        if (displayIndex.byId.has(id)) return id
+        return displayIndex.chainByMember.get(id) ?? null
+      }
+      const displaySelectedId = resolveDisplayId(effectiveSelectedId)
+      const displayActiveId = resolveDisplayId(activeLeafId)
+
+      const expandChain = (chain) => {
+        if (chain === null || chain === undefined) return
+        setExpandedChains((current) => {
+          if (current.has(chain.key)) return current
+          const next = new Set(current)
+          next.add(chain.key)
+          return next
+        })
+        if (chain.endId !== undefined) setSelectedId(chain.endId)
+      }
 
       const afterInfo = useMemo(() => {
         const pathAfter = new Map()
@@ -1843,12 +1998,14 @@ window.__ModuleLoader__.load({
             ? h('div', { className: 'tc-empty' }, allArchived ? translate('panel.allArchived') : translate('panel.empty'))
             : h('div', { className: 'tc-workspace' },
                 h(TreeCanvas, {
-                  index,
+                  index: displayIndex ?? index,
                   hiddenIds,
-                  selectedId: effectiveSelectedId,
-                  activeId: activeLeafId,
+                  selectedId: displaySelectedId,
+                  activeId: displayActiveId,
                   selectedPath,
                   afterFor,
+                  chainByRep: displayIndex?.chainByRep ?? null,
+                  onExpand: expandChain,
                   onSelect: (node) => setSelectedId(node.id),
                   sessionId,
                 }),
@@ -1880,11 +2037,12 @@ window.__ModuleLoader__.load({
      * over the frame, leaves the composer usable, and follows the active branch.
      */
     function readOverlayWidth() {
+      const max = typeof window === 'undefined' ? 1100 : Math.max(560, window.innerWidth)
       try {
         const value = Number(localStorage.getItem(WIDTH_KEY))
-        return Number.isFinite(value) && value > 0 ? Math.min(Math.max(value, 560), 1100) : 820
+        return Number.isFinite(value) && value > 0 ? Math.min(Math.max(value, 560), max) : max
       } catch {
-        return 820
+        return max
       }
     }
 
@@ -1902,6 +2060,12 @@ window.__ModuleLoader__.load({
         }
         window.addEventListener('keydown', onKeyDown)
         return () => window.removeEventListener('keydown', onKeyDown)
+      }, [state.open])
+
+      useEffect(() => {
+        if (!state.open) return undefined
+        document.body.classList.add('tc-overlay-open')
+        return () => document.body.classList.remove('tc-overlay-open')
       }, [state.open])
 
       useEffect(() => {
@@ -1924,7 +2088,7 @@ window.__ModuleLoader__.load({
         event.preventDefault()
         event.stopPropagation()
         const onMove = (moveEvent) => {
-          const max = Math.max(320, Math.min(1100, window.innerWidth - 80))
+          const max = Math.max(560, window.innerWidth)
           const next = Math.min(max, Math.max(560, window.innerWidth - moveEvent.clientX))
           setWidth(next)
         }
@@ -1962,6 +2126,8 @@ window.__ModuleLoader__.load({
           h(TreePanel, {
             sessionId: state.sessionId,
             variant: 'overlay',
+            useAccess: props.useAccess,
+            useSession: props.useSession,
             useWorkspaces: props.useWorkspaces,
             useSessions: props.useSessions,
           })))
@@ -2114,7 +2280,8 @@ window.__ModuleLoader__.load({
 .tc-branch-action:disabled{opacity:.45;cursor:not-allowed}
 .tc-action-error{margin-left:2px;color:var(--dsw-alias-state-error-primary);font-weight:700;cursor:help}
 .tc-overlay{position:fixed;inset:0;z-index:2147483000;display:flex;justify-content:flex-end;pointer-events:none}
-.tc-overlay-panel{position:relative;pointer-events:auto;max-width:92vw;height:100%;display:flex;flex-direction:column;background:var(--dsw-alias-bg-base);border-left:1px solid var(--dsw-alias-border-l1);box-shadow:-12px 0 32px rgba(0,0,0,.18);will-change:transform;animation:tc-overlay-in .24s cubic-bezier(.22,1,.36,1)}
+body.tc-overlay-open [data-conversation-scroll],body.tc-overlay-open [data-composer-seat]{visibility:hidden!important}
+.tc-overlay-panel{position:relative;pointer-events:auto;max-width:100vw;height:100%;display:flex;flex-direction:column;background:var(--dsw-alias-bg-base);border-left:1px solid var(--dsw-alias-border-l1);box-shadow:-12px 0 32px rgba(0,0,0,.18);will-change:transform;animation:tc-overlay-in .24s cubic-bezier(.22,1,.36,1)}
 .tc-overlay-panel--closing{animation:tc-overlay-out .23s cubic-bezier(.4,0,.2,1) forwards;pointer-events:none}
 @keyframes tc-overlay-in{from{transform:translateX(100%);opacity:.85}to{transform:translateX(0);opacity:1}}
 @keyframes tc-overlay-out{from{transform:translateX(0);opacity:1}to{transform:translateX(100%);opacity:.9}}
@@ -2146,6 +2313,8 @@ window.__ModuleLoader__.load({
 .tc-canvas-node:focus-visible .tc-canvas-node-halo{box-shadow:0 0 0 2px var(--dsw-alias-state-business-primary)}
 .tc-canvas-node--root .tc-canvas-node-dot{width:22px;height:22px;border-color:var(--dsw-alias-state-business-primary);background:color-mix(in srgb,var(--dsw-alias-state-business-primary) 10%,var(--dsw-alias-bg-base));color:var(--dsw-alias-state-business-primary)}
 .tc-canvas-node--blank .tc-canvas-node-dot{border-style:dashed;background:transparent}
+.tc-canvas-node--collapsed .tc-canvas-node-dot{box-shadow:0 0 0 3px color-mix(in srgb,var(--dsw-alias-state-business-primary) 8%,transparent)}
+.tc-canvas-node-count{position:absolute;left:50%;top:50%;transform:translate(8px,-50%);min-width:17px;height:15px;padding:0 4px;border-radius:8px;background:var(--dsw-alias-bg-layer-1);border:1px solid var(--dsw-alias-border-l2);color:var(--dsw-alias-label-secondary);font-size:9px;line-height:13px;text-align:center;font-variant-numeric:tabular-nums;white-space:nowrap;pointer-events:none}
 .tc-canvas-node--path .tc-canvas-node-dot{border-color:var(--dsw-alias-state-business-primary);background:color-mix(in srgb,var(--dsw-alias-state-business-primary) 12%,var(--dsw-alias-bg-base))}
 .tc-canvas-node--selected .tc-canvas-node-halo{background:color-mix(in srgb,var(--dsw-alias-state-business-primary) 16%,transparent);box-shadow:0 0 0 3px color-mix(in srgb,var(--dsw-alias-state-business-primary) 18%,transparent)}
 .tc-canvas-node--selected .tc-canvas-node-dot{border-color:var(--dsw-alias-state-business-primary);background:var(--dsw-alias-state-business-primary);color:var(--dsw-alias-bg-base)}
@@ -2164,6 +2333,7 @@ window.__ModuleLoader__.load({
 .tc-tip-q{margin-top:4px;color:var(--dsw-alias-label-secondary);font-size:11px;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden;word-break:break-word}
 .tc-tip-meta{margin-top:5px;color:var(--dsw-alias-label-tertiary);font-size:10px;font-variant-numeric:tabular-nums}
 .tc-tip-hint{margin-top:3px;color:var(--dsw-alias-label-tertiary);font-size:10px}
+.tc-tip-chain{margin-top:5px;color:var(--dsw-alias-state-business-primary);font-size:10px;font-weight:500}
 .tc-side{flex:0 0 360px;width:360px;min-width:0;height:100%;min-height:0;display:flex;flex-direction:column;border-left:1px solid var(--dsw-alias-border-l1);background:var(--dsw-alias-bg-base)}
 .tc-panel--view .tc-side{flex-basis:380px;width:380px}
 .tc-side-head{padding:14px 16px 10px;border-bottom:1px solid var(--dsw-alias-border-l1);flex-shrink:0}
@@ -2194,6 +2364,7 @@ window.__ModuleLoader__.load({
 .tc-side-note{color:var(--dsw-alias-label-tertiary);font-size:10px;line-height:1.45}
 .tc-side-error{padding:6px 8px;border:1px solid var(--dsw-alias-state-error-primary);border-radius:6px;color:var(--dsw-alias-state-error-primary);font-size:11px;line-height:1.45}
 .tc-side-actions{display:flex;flex-wrap:wrap;gap:6px;padding:10px 16px;border-top:1px solid var(--dsw-alias-border-l1);flex-shrink:0}
+.tc-side-actions--head{padding:9px 0 0;border-top:0;background:transparent}
 .tc-side-act{display:inline-flex;align-items:center;gap:4px;height:26px;padding:0 8px;border:1px solid var(--dsw-alias-border-l1);border-radius:6px;background:transparent;color:var(--dsw-alias-label-secondary);font:inherit;font-size:11px;cursor:pointer;white-space:nowrap}
 .tc-side-act:hover:not(:disabled){background:var(--dsw-alias-bg-layer-2);border-color:var(--dsw-alias-border-l2);color:var(--dsw-alias-label-primary)}
 .tc-side-act:disabled{opacity:.45;cursor:not-allowed}
