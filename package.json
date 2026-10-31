@@ -1,0 +1,56 @@
+{
+  "name": "treecom",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Tree-shaped conversation branching for DeepSeek Harness: one visible conversation, a floating tree panel plus a Conversation \"Tree\" view, and branch-from-any-turn.",
+  "license": "MIT",
+  "icon": "./icon.svg",
+  "exports": {
+    ".": "./index.js",
+    "./client": "./plugin.client.js",
+    "./locale/*.json": "./locale/*.json",
+    "./icon": "./icon.svg"
+  },
+  "files": [
+    "index.js",
+    "plugin.client.js",
+    "cordis.patch.yml",
+    "locale/*.json",
+    "icon.svg",
+    "README.md"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "immediately": true,
+      "inject": [
+        "@deepseek-ai/dsh-api-session-controller",
+        "@deepseek-ai/dsh-client-locale",
+        "@deepseek-ai/dsh-client-ui-renderer",
+        "@deepseek-ai/dsh-client-ui-conversation",
+        "@deepseek-ai/dsh-client-ui-workspace"
+      ]
+    }
+  },
+  "author": "Minchuan Deng",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Serenity-2026/dsh-treecom.git"
+  },
+  "homepage": "https://github.com/Serenity-2026/dsh-treecom#readme",
+  "bugs": {
+    "url": "https://github.com/Serenity-2026/dsh-treecom/issues"
+  },
+  "keywords": [
+    "deepseek",
+    "deepseek-harness",
+    "dsh",
+    "dsh-plugin",
+    "conversation-tree",
+    "branching",
+    "fork"
+  ]
+}

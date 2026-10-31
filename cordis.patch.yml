@@ -1,0 +1,7 @@
+# treecom mounts one loader row. The row loads the Host half (the read-only
+# /treecom index route); the Client half is discovered from dsh.client in
+# package.json and registers the floating tree panel, the header entry, and the
+# Conversation "Tree" view.
+- insert:
+    - id: treecom
+      name: treecom
