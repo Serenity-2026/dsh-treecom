@@ -86,7 +86,9 @@ window.__ModuleLoader__.load({
       'node.hoverHint': '点击查看详情',
       'node.chainHint': '连续 {n} 轮 · 点击展开',
       'node.chainAria': '连续 {n} 轮，点击展开',
-      'panel.resize': '拖动调整宽度',
+      'panel.resize': '拖动调整宽度，向左拖窄可关闭',
+      'overlay.showComposer': '显示输入框',
+      'overlay.hideComposer': '隐藏输入框',
       'node.leafHint': '切到这条分支',
       'action.branch': '分叉',
       'action.branchHint': '从这一轮分叉，开一条新的对话分支',
@@ -161,7 +163,9 @@ window.__ModuleLoader__.load({
       'node.hoverHint': 'Click for details',
       'node.chainHint': '{n} turns · click to expand',
       'node.chainAria': '{n} consecutive turns; click to expand',
-      'panel.resize': 'Drag to resize',
+      'panel.resize': 'Drag to resize; drag narrow to close',
+      'overlay.showComposer': 'Show input',
+      'overlay.hideComposer': 'Hide input',
       'node.leafHint': 'Switch to this branch',
       'action.branch': 'Branch',
       'action.branchHint': 'Branch from this turn into a new conversation branch',
@@ -1044,6 +1048,144 @@ window.__ModuleLoader__.load({
       return { positions, edges, width: Math.max(160, width), height: Math.max(160, height) }
     }
 
+    /* ------------------------------------------------------ markdown -- */
+
+    function markdownInline(text, keyPrefix) {
+      const source = String(text ?? '')
+      const pattern = /(`[^`\n]+`|\*\*[^*\n]+\*\*|__[^_\n]+__|~~[^~\n]+~~|\*[^*\n]+\*|_[^_\n]+_|\[[^\]\n]+\]\([^)\s]+\))/g
+      const nodes = []
+      let last = 0
+      let index = 0
+      let match
+      while ((match = pattern.exec(source)) !== null) {
+        if (match.index > last) nodes.push(source.slice(last, match.index))
+        const token = match[0]
+        const key = `${keyPrefix}-i${index++}`
+        if (token.startsWith('`')) {
+          nodes.push(h('code', { key }, token.slice(1, -1)))
+        } else if (token.startsWith('**') || token.startsWith('__')) {
+          nodes.push(h('strong', { key }, markdownInline(token.slice(2, -2), key)))
+        } else if (token.startsWith('~~')) {
+          nodes.push(h('del', { key }, markdownInline(token.slice(2, -2), key)))
+        } else if (token.startsWith('*') || token.startsWith('_')) {
+          nodes.push(h('em', { key }, markdownInline(token.slice(1, -1), key)))
+        } else {
+          const link = /^\[([^\]]+)\]\(([^)]+)\)$/.exec(token)
+          if (link !== null) {
+            const href = /^(https?:|mailto:|#|\/)/i.test(link[2]) ? link[2] : '#'
+            nodes.push(h('a', { key, href, target: '_blank', rel: 'noreferrer noopener' }, markdownInline(link[1], key)))
+          } else {
+            nodes.push(token)
+          }
+        }
+        last = match.index + token.length
+      }
+      if (last < source.length) nodes.push(source.slice(last))
+      return nodes.length > 0 ? nodes : [source]
+    }
+
+    function tableCells(line) {
+      return line.replace(/^\s*\|/, '').replace(/\|\s*$/, '').split('|').map((cell) => cell.trim())
+    }
+
+    function tableSeparator(line) {
+      const cells = tableCells(line)
+      return cells.length > 0 && cells.every((cell) => /^:?-{2,}:?$/.test(cell))
+    }
+
+    function markdownBlocks(source) {
+      const lines = String(source ?? '').replace(/\r\n?/g, '\n').split('\n')
+      const blocks = []
+      let i = 0
+      let key = 0
+      const nextKey = () => `md-${key++}`
+      const isBlockStart = (line) => /^\s*(```|#{1,6}\s|>|([-*+]|\d+\.)\s|---+|\*\*\*+|___+)/.test(line)
+      while (i < lines.length) {
+        const line = lines[i]
+        if (/^\s*$/.test(line)) {
+          i += 1
+          continue
+        }
+        const fence = /^\s*```(\S*)\s*$/.exec(line)
+        if (fence !== null) {
+          const code = []
+          i += 1
+          while (i < lines.length && !/^\s*```\s*$/.test(lines[i])) {
+            code.push(lines[i])
+            i += 1
+          }
+          if (i < lines.length) i += 1
+          blocks.push(h('pre', { key: nextKey(), className: 'tc-md-pre' },
+            h('code', { className: fence[1] !== '' ? `language-${fence[1]}` : undefined }, code.join('\n'))))
+          continue
+        }
+        const heading = /^(#{1,6})\s+(.*)$/.exec(line)
+        if (heading !== null) {
+          const tag = `h${heading[1].length}`
+          blocks.push(h(tag, { key: nextKey() }, markdownInline(heading[2], nextKey())))
+          i += 1
+          continue
+        }
+        if (/^\s*(?:---+|\*\*\*+|___+)\s*$/.test(line)) {
+          blocks.push(h('hr', { key: nextKey() }))
+          i += 1
+          continue
+        }
+        if (/^\s*>\s?/.test(line)) {
+          const quote = []
+          while (i < lines.length && /^\s*>\s?/.test(lines[i])) {
+            quote.push(lines[i].replace(/^\s*>\s?/, ''))
+            i += 1
+          }
+          blocks.push(h('blockquote', { key: nextKey() }, markdownBlocks(quote.join('\n'))))
+          continue
+        }
+        const list = /^\s*([-*+]|\d+\.)\s+(.*)$/.exec(line)
+        if (list !== null) {
+          const ordered = /\d+\./.test(list[1])
+          const items = []
+          while (i < lines.length) {
+            const item = /^\s*([-*+]|\d+\.)\s+(.*)$/.exec(lines[i])
+            if (item === null || /\d+\./.test(item[1]) !== ordered) break
+            items.push(item[2])
+            i += 1
+          }
+          blocks.push(h(ordered ? 'ol' : 'ul', { key: nextKey() },
+            items.map((item, itemIndex) => h('li', { key: `${nextKey()}-${itemIndex}` }, markdownInline(item, nextKey())))))
+          continue
+        }
+        if (line.includes('|') && i + 1 < lines.length && tableSeparator(lines[i + 1])) {
+          const headers = tableCells(line)
+          i += 2
+          const rows = []
+          while (i < lines.length && lines[i].includes('|') && !/^\s*$/.test(lines[i])) {
+            rows.push(tableCells(lines[i]))
+            i += 1
+          }
+          blocks.push(h('div', { key: nextKey(), className: 'tc-md-table-wrap' },
+            h('table', null,
+              h('thead', null, h('tr', null, headers.map((cell, cellIndex) => h('th', { key: `${nextKey()}-${cellIndex}` }, markdownInline(cell, nextKey()))))),
+              h('tbody', null, rows.map((row, rowIndex) => h('tr', { key: `${nextKey()}-${rowIndex}` }, row.map((cell, cellIndex) => h('td', { key: `${nextKey()}-${cellIndex}` }, markdownInline(cell, nextKey())))))))))
+          continue
+        }
+        const paragraph = []
+        while (i < lines.length && !/^\s*$/.test(lines[i]) && !(paragraph.length > 0 && isBlockStart(lines[i]))) {
+          paragraph.push(lines[i])
+          i += 1
+        }
+        if (paragraph.length > 0) {
+          blocks.push(h('p', { key: nextKey() }, markdownInline(paragraph.join('\n'), nextKey())))
+        }
+      }
+      return blocks
+    }
+
+    function MarkdownText(props) {
+      const text = props.text === null || props.text === undefined ? '' : String(props.text)
+      const className = typeof props.className === 'string' && props.className !== '' ? `tc-md ${props.className}` : 'tc-md'
+      return h('div', { className }, markdownBlocks(text))
+    }
+
     function TreeCanvas(props) {
       const { index, hiddenIds, selectedId, activeId, selectedPath, afterFor, chainByRep, onExpand, onSelect, sessionId } = props
       const layout = useMemo(() => layoutTree(index, hiddenIds), [index, hiddenIds])
@@ -1351,10 +1493,10 @@ window.__ModuleLoader__.load({
           h('div', { className: 'tc-tip-body' },
             h('div', { className: 'tc-tip-section' },
               h('div', { className: 'tc-tip-label' }, translate('node.questionLabel')),
-              h('div', { className: 'tc-tip-text' }, tipQuestion)),
+              h('div', { className: 'tc-tip-text' }, h(MarkdownText, { text: tipQuestion, className: 'tc-md--tip' }))),
             tip.node.kind === 'root' ? null : h('div', { className: 'tc-tip-section' },
               h('div', { className: 'tc-tip-label' }, translate('node.answerLabel')),
-              h('div', { className: 'tc-tip-text' }, tipAnswerText)),
+              h('div', { className: 'tc-tip-text' }, h(MarkdownText, { text: tipAnswerText, className: 'tc-md--tip' }))),
             tipErrorText !== null ? h('div', { className: 'tc-tip-error' }, tipErrorText) : null,
             tipDetail?.truncated === true ? h('div', { className: 'tc-tip-note' }, translate('node.detailTruncated')) : null),
           h('div', { className: 'tc-tip-hint' }, translate('node.hoverHint')))
@@ -1623,9 +1765,9 @@ window.__ModuleLoader__.load({
             : h('div', { className: 'tc-chat' },
                 loadError !== null ? h('div', { className: 'tc-side-error' }, fmt(translate('node.detailFailed'), { message: loadError })) : null,
                 h('div', { className: 'tc-chat-label' }, translate('node.questionLabel')),
-                h('div', { className: 'tc-chat-bubble tc-chat-bubble--user' }, question !== '' ? question : translate('node.waiting')),
+                h('div', { className: 'tc-chat-bubble tc-chat-bubble--user' }, question !== '' ? h(MarkdownText, { text: question }) : h('div', { className: 'tc-md-placeholder' }, translate('node.waiting'))),
                 h('div', { className: 'tc-chat-label' }, translate('node.answerLabel')),
-                h('div', { className: `tc-chat-bubble tc-chat-bubble--assistant${loading ? ' tc-chat-bubble--loading' : ''}` }, answerText),
+                h('div', { className: `tc-chat-bubble tc-chat-bubble--assistant${loading ? ' tc-chat-bubble--loading' : ''}` }, h(MarkdownText, { text: answerText })),
                 detail?.truncated === true ? h('div', { className: 'tc-side-note' }, translate('node.detailTruncated')) : null,
                 detail?.time ? h('div', { className: 'tc-side-note' }, formatTime(detail.time)) : null)))
     }
@@ -2157,10 +2299,14 @@ window.__ModuleLoader__.load({
     function TreeOverlay(props) {
       const state = useOverlay()
       const [width, setWidth] = useState(readOverlayWidth)
+      const [composerOpen, setComposerOpen] = useState(false)
       const widthRef = useRef(width)
       useEffect(() => {
         widthRef.current = width
       }, [width])
+      useEffect(() => {
+        if (!state.open) setComposerOpen(false)
+      }, [state.open])
       useEffect(() => {
         if (!state.open) return undefined
         const onKeyDown = (event) => {
@@ -2173,50 +2319,43 @@ window.__ModuleLoader__.load({
       useEffect(() => {
         const root = document.documentElement
         if (!state.open) {
-          document.body.classList.remove('tc-overlay-open')
+          document.body.classList.remove('tc-overlay-open', 'tc-overlay-composer')
           delete root.dataset.treecomOverlay
           return undefined
         }
         document.body.classList.add('tc-overlay-open')
+        if (composerOpen) document.body.classList.add('tc-overlay-composer')
+        else document.body.classList.remove('tc-overlay-composer')
         root.dataset.treecomOverlay = 'open'
         return () => {
-          document.body.classList.remove('tc-overlay-open')
+          document.body.classList.remove('tc-overlay-open', 'tc-overlay-composer')
           delete root.dataset.treecomOverlay
         }
-      }, [state.open])
+      }, [state.open, composerOpen])
 
-      useEffect(() => {
-        if (!state.open) return undefined
-        const onPointerDown = (event) => {
-          const target = event.target
-          if (!(target instanceof Element)) return
-          if (target.closest('.tc-overlay-panel') !== null) return
-          // The header button is a toggle: its own click decides.
-          if (target.closest('.tc-open-btn') !== null) return
-          // A page/session switch in the left sidebar must keep the panel open;
-          // only a click in the conversation retracts it.
-          if (target.closest('[data-conversation-scroll], [data-composer-seat]') === null) return
-          closePanel()
-        }
-        document.addEventListener('pointerdown', onPointerDown, true)
-        return () => document.removeEventListener('pointerdown', onPointerDown, true)
-      }, [state.open])
       const startResize = (event) => {
         event.preventDefault()
         event.stopPropagation()
+        const startWidth = width
+        let latest = startWidth
+        const max = Math.max(560, Math.min(1100, window.innerWidth - 80))
         const onMove = (moveEvent) => {
-          const max = Math.max(560, Math.min(1100, window.innerWidth - 80))
-          const next = Math.min(max, Math.max(560, window.innerWidth - moveEvent.clientX))
-          setWidth(next)
+          const raw = window.innerWidth - moveEvent.clientX
+          latest = raw
+          setWidth(Math.max(320, Math.min(max, raw)))
         }
         const onUp = () => {
           window.removeEventListener('pointermove', onMove)
           window.removeEventListener('pointerup', onUp)
+          const closeByDrag = latest < 480
+          const next = closeByDrag ? startWidth : Math.min(max, Math.max(560, latest))
+          setWidth(next)
           try {
-            localStorage.setItem(WIDTH_KEY, String(widthRef.current))
+            localStorage.setItem(WIDTH_KEY, String(next))
           } catch {
             /* storage may be unavailable */
           }
+          if (closeByDrag) closePanel()
         }
         window.addEventListener('pointermove', onMove)
         window.addEventListener('pointerup', onUp)
@@ -2247,7 +2386,28 @@ window.__ModuleLoader__.load({
             useSession: props.useSession,
             useWorkspaces: props.useWorkspaces,
             useSessions: props.useSessions,
-          })))
+          }),
+          h('div', { className: 'tc-overlay-foot' },
+            h('button', {
+              type: 'button',
+              className: 'tc-overlay-composer-toggle',
+              onClick: () => {
+                if (composerOpen) {
+                  setComposerOpen(false)
+                  return
+                }
+                setComposerOpen(true)
+                setTimeout(() => {
+                  try {
+                    const input = document.querySelector('[data-composer-input]')
+                    if (input !== null && typeof input.focus === 'function') input.focus()
+                  } catch {
+                    /* composer may not be mounted */
+                  }
+                }, 80)
+              },
+            }, h(Icon, { name: composerOpen ? 'down' : 'plus', size: 13 }),
+              translate(composerOpen ? 'overlay.hideComposer' : 'overlay.showComposer')))))
     }
 
     /* ------------------------------------------------- header opener -- */
@@ -2397,7 +2557,7 @@ window.__ModuleLoader__.load({
 .tc-branch-action:disabled{opacity:.45;cursor:not-allowed}
 .tc-action-error{margin-left:2px;color:var(--dsw-alias-state-error-primary);font-weight:700;cursor:help}
 .tc-overlay{position:fixed;inset:0;z-index:2147483000;display:flex;justify-content:flex-end;pointer-events:none}
-:where(body.tc-overlay-open,html[data-treecom-overlay="open"]) [data-composer-seat],:where(body.tc-overlay-open,html[data-treecom-overlay="open"]) [data-conversation-region="composer"],:where(body.tc-overlay-open,html[data-treecom-overlay="open"]) [data-composer-card],:where(body.tc-overlay-open,html[data-treecom-overlay="open"]) [data-composer-input],:where(body.tc-overlay-open,html[data-treecom-overlay="open"]) [data-composer-dock],:where(body.tc-overlay-open,html[data-treecom-overlay="open"]) [data-composer-overlay],:where(body.tc-overlay-open,html[data-treecom-overlay="open"]) [data-conversation-composer-overlay]{display:none!important}
+body.tc-overlay-open:not(.tc-overlay-composer) [data-composer-seat],body.tc-overlay-open:not(.tc-overlay-composer) [data-conversation-region="composer"],body.tc-overlay-open:not(.tc-overlay-composer) [data-composer-card],body.tc-overlay-open:not(.tc-overlay-composer) [data-composer-input],body.tc-overlay-open:not(.tc-overlay-composer) [data-composer-dock],body.tc-overlay-open:not(.tc-overlay-composer) [data-composer-overlay],body.tc-overlay-open:not(.tc-overlay-composer) [data-conversation-composer-overlay]{display:none!important}
 .tc-overlay-panel{position:relative;pointer-events:auto;max-width:92vw;height:100%;display:flex;flex-direction:column;background:var(--dsw-alias-bg-base);border-left:1px solid var(--dsw-alias-border-l1);box-shadow:-12px 0 32px rgba(0,0,0,.18);will-change:transform;animation:tc-overlay-in .24s cubic-bezier(.22,1,.36,1)}
 .tc-overlay-panel--closing{animation:tc-overlay-out .23s cubic-bezier(.4,0,.2,1) forwards;pointer-events:none}
 @keyframes tc-overlay-in{from{transform:translateX(100%);opacity:.85}to{transform:translateX(0);opacity:1}}
@@ -2405,6 +2565,9 @@ window.__ModuleLoader__.load({
 .tc-overlay-bar{display:flex;align-items:center;gap:8px;height:40px;padding:0 12px;border-bottom:1px solid var(--dsw-alias-border-l1);flex-shrink:0}
 .tc-overlay-title{font-weight:600;font-size:13px}
 .tc-overlay .tc-panel{flex:1;min-height:0}
+.tc-overlay-foot{flex-shrink:0;display:flex;justify-content:center;padding:8px 12px;border-top:1px solid var(--dsw-alias-border-l1);background:var(--dsw-alias-bg-base)}
+.tc-overlay-composer-toggle{display:inline-flex;align-items:center;gap:6px;height:26px;padding:0 10px;border:1px solid var(--dsw-alias-border-l2);border-radius:6px;background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-secondary);font:inherit;font-size:11px;cursor:pointer}
+.tc-overlay-composer-toggle:hover{background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-primary)}
 .tc-resize{position:absolute;left:-3px;top:0;bottom:0;width:8px;z-index:6;cursor:col-resize;touch-action:none}
 .tc-resize::after{content:"";position:absolute;left:3px;top:50%;transform:translateY(-50%);width:2px;height:36px;border-radius:1px;background:var(--dsw-alias-border-l2);opacity:0;transition:opacity .12s}
 .tc-overlay-panel:hover .tc-resize::after{opacity:1}
@@ -2457,6 +2620,33 @@ window.__ModuleLoader__.load({
 .tc-tip-meta{margin-top:5px;color:var(--dsw-alias-label-tertiary);font-size:10px;font-variant-numeric:tabular-nums}
 .tc-tip-hint{margin-top:3px;color:var(--dsw-alias-label-tertiary);font-size:10px}
 .tc-tip-chain{margin-top:5px;color:var(--dsw-alias-state-business-primary);font-size:10px;font-weight:500}
+.tc-md{min-width:0;color:inherit;line-height:1.65;font-size:12px;overflow-wrap:anywhere;white-space:pre-wrap}
+.tc-md > :first-child{margin-top:0}
+.tc-md > :last-child{margin-bottom:0}
+.tc-md p{margin:0 0 8px}
+.tc-md h1,.tc-md h2,.tc-md h3,.tc-md h4,.tc-md h5,.tc-md h6{margin:10px 0 6px;color:var(--dsw-alias-label-primary);font-weight:600;line-height:1.35;letter-spacing:0}
+.tc-md h1{font-size:16px}
+.tc-md h2{font-size:15px}
+.tc-md h3{font-size:14px}
+.tc-md h4,.tc-md h5,.tc-md h6{font-size:13px}
+.tc-md ul,.tc-md ol{margin:0 0 8px;padding-left:20px}
+.tc-md li{margin:2px 0}
+.tc-md li > p{margin:0}
+.tc-md code{padding:1px 4px;border-radius:4px;background:var(--dsw-alias-bg-layer-3);font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11px}
+.tc-md pre{margin:0 0 8px;padding:8px 10px;border-radius:6px;background:var(--dsw-alias-bg-layer-3);overflow:auto;max-height:260px;white-space:pre}
+.tc-md pre code{padding:0;background:transparent;font-size:11px;white-space:pre}
+.tc-md blockquote{margin:0 0 8px;padding:2px 0 2px 10px;border-left:2px solid var(--dsw-alias-border-l2);color:var(--dsw-alias-label-secondary)}
+.tc-md a{color:var(--dsw-alias-state-business-primary);text-decoration:none}
+.tc-md a:hover{text-decoration:underline}
+.tc-md hr{margin:10px 0;border:0;border-top:1px solid var(--dsw-alias-border-l1)}
+.tc-md .tc-md-table-wrap{margin:0 0 8px;max-width:100%;overflow-x:auto}
+.tc-md table{border-collapse:collapse;font-size:11px;min-width:0}
+.tc-md th,.tc-md td{padding:4px 7px;border:1px solid var(--dsw-alias-border-l1);text-align:left;vertical-align:top}
+.tc-md th{background:var(--dsw-alias-bg-layer-2);font-weight:600;color:var(--dsw-alias-label-primary)}
+.tc-md--tip{font-size:11px;line-height:1.55}
+.tc-md--tip h1,.tc-md--tip h2,.tc-md--tip h3,.tc-md--tip h4{font-size:12px}
+.tc-md--tip pre{max-height:180px}
+.tc-md-placeholder{color:var(--dsw-alias-label-tertiary)}
 .tc-side{flex:0 0 360px;width:360px;min-width:0;height:100%;min-height:0;display:flex;flex-direction:column;border-left:1px solid var(--dsw-alias-border-l1);background:var(--dsw-alias-bg-base)}
 .tc-panel--view .tc-side{flex-basis:380px;width:380px}
 .tc-side-head{padding:14px 16px 10px;border-bottom:1px solid var(--dsw-alias-border-l1);flex-shrink:0}

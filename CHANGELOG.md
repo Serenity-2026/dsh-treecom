@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-- Opening the header overlay now hides only the composer while the conversation stays visible; the overlay slides in from the right at 820px by default and can be dragged between 560px and 1100px.
+- Opening the header overlay now hides only the composer while the conversation stays visible; the overlay slides in from the right at 820px by default and can be dragged between 560px and 1100px. A bottom button temporarily brings the composer back, and dragging the left edge past the narrow threshold closes the panel.
 - Tree data is cached per session and refreshed only when the live session revision changes (new turns, session switches/additions, title/running/blank changes); the 8-second polling loop is gone, a running session refreshes at a low 5-second cadence, and the refresh button forces a reload.
 - Linear stretches with no branch collapse into one representative node with a turn count; clicking it expands the whole chain.
 - Rename/archive/fork actions moved from the bottom of the detail pane into its header, so they are always visible.
@@ -13,6 +13,7 @@
 - Clicking a node now selects it and opens a right-side detail pane instead of switching branches; a "Go to this turn" action performs the switch and jump.
 - Right pane shows context-window usage (percentage, bar, exact tokens), turns following the node, a scrollable full question/answer preview, and archive/rename/fork actions.
 - Hovering a node shows an interactive preview with the turn, full question and answer, context usage, and turns after; the preview stays open when the pointer moves into it and scrolls internally with the wheel.
+- Question and answer text in the right pane and the hover preview now renders Markdown (headings, lists, fenced code, tables, links, emphasis).
 - Removed the old list cards, per-card status column, and collapse controls; the header overlay now stays a side panel and can be resized between 560px and 1100px.
 - Host `/treecom` serves per-turn context usage and an on-demand `detail` action for full conversation text.
 
