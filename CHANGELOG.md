@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Canvas now grows vertically from the top (root at top, branches below); the initial view focuses the root, and "Go to this turn" centers the active leaf.
+- Scroll wheel / trackpad zooms the canvas around the pointer (0.3x–3x), with pan preserved.
+- Renamed the Conversation view tab from "Tree" to "对话树 / Conversation tree" to match the header entry.
 - Replaced the list tree with a pannable canvas: circular nodes and curved edges, root on the right, branches growing left; drag empty space to pan without bounds.
 - Clicking a node now selects it and opens a right-side detail pane instead of switching branches; a "Go to this turn" action performs the switch and jump.
 - Right pane shows context-window usage (percentage, bar, exact tokens), turns following the node, a scrollable full question/answer preview, and archive/rename/fork actions.

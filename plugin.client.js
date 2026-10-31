@@ -80,7 +80,7 @@ window.__ModuleLoader__.load({
       'node.detailTruncated': '内容较长，已截断。',
       'node.jump': '回到这一轮',
       'node.afterLabel': '后续轮数',
-      'node.canvasHint': '拖动空白处平移画布 · 点击节点查看详情',
+      'node.canvasHint': '拖动空白处平移 · 滚轮缩放 · 点击节点查看详情',
       'node.center': '回到当前',
       'node.fit': '居中',
       'node.selectHint': '点击树上的节点查看详情',
@@ -92,7 +92,7 @@ window.__ModuleLoader__.load({
       'action.branchHint': '从这一轮分叉，开一条新的对话分支',
       'action.busy': '正在分叉…',
       'header.open': '对话树',
-      'view.title': '树',
+      'view.title': '对话树',
       'path.open': '打开对话树',
       'path.root': '起点',
       'path.siblings': '兄弟分支',
@@ -153,9 +153,9 @@ window.__ModuleLoader__.load({
       'node.detailTruncated': 'Long content truncated.',
       'node.jump': 'Go to this turn',
       'node.afterLabel': 'Turns after',
-      'node.canvasHint': 'Drag empty space to pan · click a node for details',
+      'node.canvasHint': 'Drag blank space to pan · scroll to zoom · click a node for details',
       'node.center': 'Center current',
-      'node.fit': 'Whole tree',
+      'node.fit': 'Center',
       'node.selectHint': 'Click a node in the tree to see its details',
       'node.rootDetail': 'This is where the conversation starts.',
       'node.hoverHint': 'Click for details',
@@ -165,7 +165,7 @@ window.__ModuleLoader__.load({
       'action.branchHint': 'Branch from this turn into a new conversation branch',
       'action.busy': 'Branching…',
       'header.open': 'Conversation tree',
-      'view.title': 'Tree',
+      'view.title': 'Conversation tree',
       'path.open': 'Open the conversation tree',
       'path.root': 'Start',
       'path.siblings': 'Sibling branches',
@@ -883,34 +883,34 @@ window.__ModuleLoader__.load({
     }
 
     /**
-     * Tidy tree, drawn horizontally with the root on the right (the same
-     * orientation as the sketch): every fork adds a column to the left, and
-     * the canvas itself can be panned without bounds.
+     * Tidy tree, drawn vertically from top to bottom: the root sits at the
+     * top, siblings spread left to right, and the canvas itself can be
+     * panned and zoomed without bounds.
      */
     function layoutTree(index, hiddenIds) {
       const positions = new Map()
       const edges = []
-      const hGap = 132
-      const vGap = 64
+      const leafGap = 148
+      const levelGap = 92
       const padding = 56
       let cursor = 0
       let maxDepth = 0
       const walk = (node, depth) => {
         const children = (index.children.get(node.id) ?? []).filter((child) => hiddenIds.has(child.id) !== true)
-        let y
+        let x
         if (children.length === 0) {
-          y = padding + cursor * vGap
+          x = padding + cursor * leafGap
           cursor += 1
         } else {
-          const childYs = []
+          const childXs = []
           for (const child of children) {
             const childPosition = walk(child, depth + 1)
-            childYs.push(childPosition.y)
+            childXs.push(childPosition.x)
             edges.push([node.id, child.id])
           }
-          y = childYs[0] + (childYs[childYs.length - 1] - childYs[0]) / 2
+          x = childXs[0] + (childXs[childXs.length - 1] - childXs[0]) / 2
         }
-        const x = padding + depth * hGap
+        const y = padding + depth * levelGap
         const position = { x, y, depth }
         positions.set(node.id, position)
         if (depth > maxDepth) maxDepth = depth
@@ -920,13 +920,9 @@ window.__ModuleLoader__.load({
         if (hiddenIds.has(root.id)) continue
         walk(root, 0)
       }
-      // Flip the columns so the root sits on the right and branches grow left.
-      for (const [id, position] of positions) {
-        positions.set(id, { ...position, x: padding + (maxDepth - position.depth) * hGap })
-      }
       const leafCount = Math.max(1, cursor)
-      const width = padding * 2 + maxDepth * hGap
-      const height = padding * 2 + Math.max(0, leafCount - 1) * vGap
+      const width = padding * 2 + Math.max(0, leafCount - 1) * leafGap
+      const height = padding * 2 + maxDepth * levelGap
       return { positions, edges, width: Math.max(160, width), height: Math.max(160, height) }
     }
 
@@ -935,23 +931,32 @@ window.__ModuleLoader__.load({
       const layout = useMemo(() => layoutTree(index, hiddenIds), [index, hiddenIds])
       const wrapRef = useRef(null)
       const [pan, setPan] = useState({ x: 0, y: 0 })
+      const [zoom, setZoom] = useState(1)
       const [dragging, setDragging] = useState(false)
       const [tip, setTip] = useState(null)
       const dragRef = useRef(null)
       const suppressClick = useRef(false)
       const centeredSession = useRef(null)
+      const panRef = useRef(pan)
+      const zoomRef = useRef(1)
 
-      const centerOn = (id) => {
+      useEffect(() => {
+        panRef.current = pan
+      }, [pan])
+
+      const centerOn = (id, alignTop = false) => {
         const wrap = wrapRef.current
         if (wrap === null) return
         const rect = wrap.getBoundingClientRect()
         if (rect.width === 0 || rect.height === 0) return
+        const scale = zoomRef.current
+        const anchorY = alignTop ? Math.max(24, rect.height * 0.16) : rect.height / 2
         const position = id === null ? null : layout.positions.get(id)
-        if (position === undefined || position === null) {
-          setPan({ x: rect.width / 2 - layout.width / 2, y: rect.height / 2 - layout.height / 2 })
-        } else {
-          setPan({ x: rect.width / 2 - position.x, y: rect.height / 2 - position.y })
-        }
+        const nextPan = position === undefined || position === null
+          ? { x: rect.width / 2 - (layout.width * scale) / 2, y: rect.height / 2 - (layout.height * scale) / 2 }
+          : { x: rect.width / 2 - position.x * scale, y: anchorY - position.y * scale }
+        panRef.current = nextPan
+        setPan(nextPan)
       }
 
       useEffect(() => {
@@ -964,8 +969,33 @@ window.__ModuleLoader__.load({
         if (wrap === null || layout.positions.size === 0) return
         if (centeredSession.current === sessionId) return
         centeredSession.current = sessionId
-        centerOn(selectedId ?? activeId ?? null)
+        centerOn(index.roots[0]?.id ?? selectedId ?? activeId ?? null, true)
       }, [sessionId, layout, selectedId, activeId])
+
+      useEffect(() => {
+        const wrap = wrapRef.current
+        if (wrap === null) return undefined
+        const onWheel = (event) => {
+          event.preventDefault()
+          const rect = wrap.getBoundingClientRect()
+          if (rect.width === 0 || rect.height === 0) return
+          const factor = Math.exp(-event.deltaY * 0.0015)
+          const next = Math.min(3, Math.max(0.3, zoomRef.current * factor))
+          if (Math.abs(next - zoomRef.current) < 0.0001) return
+          const px = event.clientX - rect.left
+          const py = event.clientY - rect.top
+          const current = panRef.current
+          const worldX = (px - current.x) / zoomRef.current
+          const worldY = (py - current.y) / zoomRef.current
+          const nextPan = { x: px - worldX * next, y: py - worldY * next }
+          zoomRef.current = next
+          panRef.current = nextPan
+          setZoom(next)
+          setPan(nextPan)
+        }
+        wrap.addEventListener('wheel', onWheel, { passive: false })
+        return () => { wrap.removeEventListener('wheel', onWheel) }
+      }, [])
 
       const isElement = (value) => typeof Element !== 'undefined' && value instanceof Element
 
@@ -1061,8 +1091,8 @@ window.__ModuleLoader__.load({
         const from = layout.positions.get(fromId)
         const to = layout.positions.get(toId)
         if (from === undefined || to === undefined) return null
-        const midX = (from.x + to.x) / 2
-        const d = `M ${from.x} ${from.y} C ${midX} ${from.y}, ${midX} ${to.y}, ${to.x} ${to.y}`
+        const midY = (from.y + to.y) / 2
+        const d = `M ${from.x} ${from.y} C ${from.x} ${midY}, ${to.x} ${midY}, ${to.x} ${to.y}`
         return h('path', {
           key: `${fromId}>${toId}`,
           d,
@@ -1114,7 +1144,7 @@ window.__ModuleLoader__.load({
           style: {
             width: `${layout.width}px`,
             height: `${layout.height}px`,
-            transform: `translate3d(${pan.x}px, ${pan.y}px, 0)`,
+            transform: `translate3d(${pan.x}px, ${pan.y}px, 0) scale(${zoom})`,
           },
         },
           h('svg', {
