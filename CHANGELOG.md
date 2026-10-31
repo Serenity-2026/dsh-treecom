@@ -14,6 +14,7 @@
 - Right pane shows context-window usage (percentage, bar, exact tokens), turns following the node, a scrollable full question/answer preview, and archive/rename/fork actions.
 - Hovering a node shows an interactive preview with the turn, full question and answer, context usage, and turns after; the preview stays open when the pointer moves into it and scrolls internally with the wheel.
 - Question and answer text in the right pane and the hover preview now renders Markdown (headings, lists, fenced code, tables, links, emphasis).
+- The Conversation "对话树" view tab now hides the composer as well; switching back to "对话" restores it. Clicking elsewhere in the conversation retracts the header overlay, while interacting with the revealed composer keeps it open.
 - Removed the old list cards, per-card status column, and collapse controls; the header overlay now stays a side panel and can be resized between 560px and 1100px.
 - Host `/treecom` serves per-turn context usage and an on-demand `detail` action for full conversation text.
 

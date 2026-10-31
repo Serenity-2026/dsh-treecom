@@ -2276,6 +2276,13 @@ window.__ModuleLoader__.load({
     }
 
     function ViewTree(props) {
+      useEffect(() => {
+        if (typeof document === 'undefined') return undefined
+        document.body.classList.add('tc-view-tree-open')
+        return () => {
+          document.body.classList.remove('tc-view-tree-open')
+        }
+      }, [])
       return h(TreePanel, { ...props, variant: 'view' })
     }
 
@@ -2314,6 +2321,23 @@ window.__ModuleLoader__.load({
         }
         window.addEventListener('keydown', onKeyDown)
         return () => window.removeEventListener('keydown', onKeyDown)
+      }, [state.open])
+
+      useEffect(() => {
+        if (!state.open) return undefined
+        const onPointerDown = (event) => {
+          const target = event.target
+          if (!(target instanceof Element)) return
+          if (target.closest('.tc-overlay-panel') !== null) return
+          if (target.closest('.tc-open-btn') !== null) return
+          // The revealed composer is meant to stay usable while the panel is open.
+          if (target.closest('[data-composer-seat],[data-conversation-region="composer"],[data-composer-card],[data-composer-input],[data-composer-dock],[data-composer-overlay],[data-conversation-composer-overlay]') !== null) return
+          // Clicking elsewhere in the conversation retracts the side panel.
+          if (target.closest('[data-conversation-scroll],[data-conversation-content]') === null) return
+          closePanel()
+        }
+        document.addEventListener('pointerdown', onPointerDown, true)
+        return () => document.removeEventListener('pointerdown', onPointerDown, true)
       }, [state.open])
 
       useEffect(() => {
@@ -2605,7 +2629,7 @@ window.__ModuleLoader__.load({
 .tc-branch-action:disabled{opacity:.45;cursor:not-allowed}
 .tc-action-error{margin-left:2px;color:var(--dsw-alias-state-error-primary);font-weight:700;cursor:help}
 .tc-overlay{position:fixed;inset:0;z-index:2147483000;display:flex;justify-content:flex-end;pointer-events:none}
-body.tc-overlay-open:not(.tc-overlay-composer) [data-composer-seat],body.tc-overlay-open:not(.tc-overlay-composer) [data-conversation-region="composer"],body.tc-overlay-open:not(.tc-overlay-composer) [data-composer-card],body.tc-overlay-open:not(.tc-overlay-composer) [data-composer-input],body.tc-overlay-open:not(.tc-overlay-composer) [data-composer-dock],body.tc-overlay-open:not(.tc-overlay-composer) [data-composer-overlay],body.tc-overlay-open:not(.tc-overlay-composer) [data-conversation-composer-overlay]{display:none!important},body.tc-overlay-open:not(.tc-overlay-composer) [contenteditable="true"],body.tc-overlay-open:not(.tc-overlay-composer) textarea{display:none!important}
+body.tc-overlay-open:not(.tc-overlay-composer) [data-composer-seat],body.tc-overlay-open:not(.tc-overlay-composer) [data-conversation-region="composer"],body.tc-overlay-open:not(.tc-overlay-composer) [data-composer-card],body.tc-overlay-open:not(.tc-overlay-composer) [data-composer-input],body.tc-overlay-open:not(.tc-overlay-composer) [data-composer-dock],body.tc-overlay-open:not(.tc-overlay-composer) [data-composer-overlay],body.tc-overlay-open:not(.tc-overlay-composer) [data-conversation-composer-overlay],body.tc-overlay-open:not(.tc-overlay-composer) [contenteditable="true"],body.tc-overlay-open:not(.tc-overlay-composer) textarea{display:none!important}body.tc-view-tree-open:not(.tc-overlay-composer) [data-composer-seat],body.tc-view-tree-open:not(.tc-overlay-composer) [data-conversation-region="composer"],body.tc-view-tree-open:not(.tc-overlay-composer) [data-composer-card],body.tc-view-tree-open:not(.tc-overlay-composer) [data-composer-input],body.tc-view-tree-open:not(.tc-overlay-composer) [data-composer-dock],body.tc-view-tree-open:not(.tc-overlay-composer) [data-composer-overlay],body.tc-view-tree-open:not(.tc-overlay-composer) [data-conversation-composer-overlay],body.tc-view-tree-open:not(.tc-overlay-composer) [contenteditable="true"],body.tc-view-tree-open:not(.tc-overlay-composer) textarea{display:none!important}
 .tc-overlay-panel{position:relative;pointer-events:auto;max-width:92vw;height:100%;display:flex;flex-direction:column;background:var(--dsw-alias-bg-base);border-left:1px solid var(--dsw-alias-border-l1);box-shadow:-12px 0 32px rgba(0,0,0,.18);will-change:transform;animation:tc-overlay-in .24s cubic-bezier(.22,1,.36,1)}
 body.tc-overlay-composer .tc-overlay-panel{height:calc(100% - 116px)}
 .tc-overlay-panel--closing{animation:tc-overlay-out .23s cubic-bezier(.4,0,.2,1) forwards;pointer-events:none}
