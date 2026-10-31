@@ -1108,7 +1108,9 @@ window.__ModuleLoader__.load({
 .tc-notice--busy{border-color:var(--dsw-alias-border-l2);color:var(--dsw-alias-label-secondary)}
 .tc-warn{margin:8px 12px 0;color:var(--dsw-alias-state-warn-label);font-size:11px}
 .tc-branch{min-width:0}
-.tc-children{margin-left:12px;padding-left:10px;border-left:1px dashed var(--dsw-alias-border-l1)}
+/* The card's own marginLeft carries branch depth. Indenting every nested
+   .tc-children as well would shrink a long linear conversation on each turn. */
+.tc-children{margin-left:0;padding-left:0;border-left:1px dashed var(--dsw-alias-border-l1)}
 .tc-children--fork{border-left-color:var(--dsw-alias-border-l2)}
 .tc-root{display:flex;align-items:center;gap:6px;padding:4px 4px 6px 2px;color:var(--dsw-alias-label-tertiary);font-size:11px;min-width:0}
 .tc-root-mark{display:inline-flex}
