@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.3.0 — 2026-10-31
 
 - The question and answer bubbles in the right detail pane now use max-heights: they shrink to the content and scroll internally only when the content exceeds the limit.
 - Hover preview uses the normal arrow over its frame and an I-beam over text, so text selection/copy is discoverable without dragging first.
