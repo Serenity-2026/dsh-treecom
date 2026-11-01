@@ -618,6 +618,28 @@ window.__ModuleLoader__.load({
       return { byId, children, leaves, leaf, path, chain, roots, sessionById: index.sessionById, chainByRep, chainByMember }
     }
 
+    /**
+     * In the all-trees canvas, a promoted node becomes a top-level root and is
+     * detached from its original parent edge. This shows each promoted tree as
+     * its own tree without duplicating node ids.
+     */
+    function partitionPromoted(index, entries) {
+      if (index === null || !Array.isArray(entries) || entries.length === 0) return index
+      const byId = new Map(index.byId)
+      const children = new Map()
+      for (const [parentId, list] of index.children) children.set(parentId, [...list])
+      const roots = [...index.roots]
+      for (const entry of entries) {
+        const node = byId.get(entry.nodeId)
+        if (node === undefined || node.parentId === null || node.parentId === undefined) continue
+        const parentChildren = children.get(node.parentId)
+        if (parentChildren !== undefined) children.set(node.parentId, parentChildren.filter((child) => child.id !== node.id))
+        byId.set(node.id, { ...node, parentId: null })
+        if (!roots.some((root) => root.id === node.id)) roots.push(byId.get(node.id))
+      }
+      return { ...index, byId, children, roots }
+    }
+
     /* -------------------------------------------------------- actions -- */
 
     const pending = { focusSession: null }
@@ -1343,8 +1365,8 @@ window.__ModuleLoader__.load({
     }
 
     function TreeCanvas(props) {
-      const { index, hiddenIds, selectedId, activeId, selectedPath, afterFor, chainByRep, chainByMember, onExpand, onCollapse, onSelect, sessionId, rootId, locked, focusNodeId, generatingIds, childGeneratingIds, onPromote } = props
-      const layout = useMemo(() => layoutTree(index, hiddenIds), [index, hiddenIds])
+      const { index, layoutIndex, hiddenIds, selectedId, activeId, selectedPath, afterFor, chainByRep, chainByMember, onExpand, onCollapse, onSelect, sessionId, rootId, locked, focusNodeId, generatingIds, childGeneratingIds, onPromote } = props
+      const layout = useMemo(() => layoutTree(layoutIndex ?? index, hiddenIds), [index, layoutIndex, hiddenIds])
       const wrapRef = useRef(null)
       const [pan, setPan] = useState({ x: 0, y: 0 })
       const [zoom, setZoom] = useState(1)
@@ -1800,6 +1822,7 @@ window.__ModuleLoader__.load({
       }
 
       const edges = layout.edges.map(([fromId, toId]) => {
+        if (!index.byId.has(fromId) || !index.byId.has(toId)) return null
         const from = layout.positions.get(fromId)
         const to = layout.positions.get(toId)
         if (from === undefined || to === undefined) return null
@@ -1964,7 +1987,7 @@ window.__ModuleLoader__.load({
     function NodeDetailPane(props) {
       const {
         node, after, afterOnPath, isHere, isLeaf, running, childRunning, liveRunning, archived,
-        canFork, busy, hasChildren, childCollapsed, onJump, onFork, onRename, onArchive, onAsk,
+        canFork, busy, hasChildren, childCollapsed, displayName, onJump, onFork, onRename, onArchive, onAsk,
         onToggleChildren, onPromote,
       } = props
       const [detail, setDetail] = useState(null)
@@ -2140,10 +2163,17 @@ window.__ModuleLoader__.load({
       const chatHead = (kind, label, text) => h('div', { className: 'tc-chat-head' },
         h('span', { className: 'tc-chat-label' }, label),
         copyButton(kind, text))
-      const title = node.kind === 'root'
-        ? translate('path.root')
+      const title = typeof displayName === 'string' && displayName.trim() !== ''
+        ? displayName.trim()
+        : node.kind === 'root'
+          ? translate('path.root')
+          : node.kind === 'blank'
+            ? translate('node.blank')
+            : fmt(translate('node.turn'), { n: node.turn })
+      const subtitle = node.kind === 'root'
+        ? ''
         : node.kind === 'blank'
-          ? translate('node.blank')
+          ? translate('node.waiting')
           : fmt(translate('node.turn'), { n: node.turn })
       const afterTitle = after === 0
         ? translate('node.afterZero')
@@ -2246,8 +2276,8 @@ window.__ModuleLoader__.load({
                   onBlur: submitRename,
                 })
               : h('div', { className: 'tc-side-title', title }, title)),
-          isLeaf && node.label !== '' && node.label !== title
-            ? h('div', { className: 'tc-side-sub' }, node.label)
+          subtitle !== '' && subtitle !== title
+            ? h('div', { className: 'tc-side-sub' }, subtitle)
             : null,
           badges.length > 0 ? h('div', { className: 'tc-side-badges' }, badges) : null,
           actions.length > 0 ? h('div', { className: 'tc-side-actions tc-side-actions--head' }, actions) : null),
@@ -2331,6 +2361,8 @@ window.__ModuleLoader__.load({
       const liveRevision = useMemo(() => sessionRevision(liveSessions), [liveSessions])
       const { data, error, reload } = useTree(sessionId, liveRevision, runningActive)
       const index = useMemo(() => (data === null ? null : indexOf(data)), [data])
+      const forestIndex = useMemo(() => (forest !== null && Array.isArray(forest.nodes) ? indexOf(forest) : null), [forest])
+      const forestDisplayIndex = useMemo(() => partitionPromoted(forestIndex, promoted), [forestIndex, promoted])
       const runningInfo = useMemo(() => runningNodesOf(index), [index])
       const selectedNodeId = selectedId !== null && index !== null && index.byId.has(selectedId)
         ? selectedId
@@ -2639,6 +2671,21 @@ window.__ModuleLoader__.load({
         return overrides[node.id] ?? node.label
       }
 
+      const nodeNameOf = (node) => {
+        if (node === null || node === undefined) return ''
+        const custom = overrides[node.id] ?? data?.labels?.[node.id]
+        if (typeof custom === 'string' && custom.trim() !== '') return custom.trim()
+        if (node.kind === 'root') {
+          const rootName = data?.treeTitle ?? node.label
+          return typeof rootName === 'string' && rootName.trim() !== '' ? rootName.trim() : translate('path.root')
+        }
+        const source = typeof node.prompt === 'string' && node.prompt.trim() !== ''
+          ? node.prompt.replace(/\s+/g, ' ').trim()
+          : (typeof node.label === 'string' ? node.label.trim() : '')
+        if (source === '') return translate('node.blank')
+        return source.length > 10 ? `${source.slice(0, 10)}…` : source
+      }
+
       const hiddenIds = useMemo(() => {
         const hidden = new Set()
         if (data === null || index === null || archivedIds.size === 0) return hidden
@@ -2763,7 +2810,7 @@ window.__ModuleLoader__.load({
 
       const promoteNode = (node) => {
         if (node === null || node === undefined || node.kind === 'root') return
-        const entry = { nodeId: node.id, sessionId: node.sessionId, label: labelOf(node) }
+        const entry = { nodeId: node.id, sessionId: node.sessionId, label: nodeNameOf(node) }
         setPromoted((current) => {
           if (current.some((item) => item.nodeId === entry.nodeId)) return current
           const next = [...current, entry]
@@ -2977,6 +3024,10 @@ window.__ModuleLoader__.load({
       const paneChildRunning = selectedNode !== null && runningInfo.childGenerating.has(selectedNode.id)
       const paneLiveRunning = selectedNode !== null && liveSessions?.[selectedNode.sessionId]?.running === true
       const paneArchived = selectedNode !== null && archivedIds.has(selectedNode.sessionId)
+      const treeRootNode = index !== null ? (index.byId.get(viewRootId ?? data.rootId) ?? null) : null
+      const treeName = treeMode === 'all'
+        ? translate('panel.allTrees')
+        : (treeRootNode !== null ? nodeNameOf(treeRootNode) : data.treeTitle)
       const modeSwitch = h('div', { className: 'tc-mode' },
         h('button', {
           type: 'button',
@@ -2988,36 +3039,46 @@ window.__ModuleLoader__.load({
           className: `tc-mode-btn${treeMode === 'all' ? ' tc-mode-btn--active' : ''}`,
           onClick: () => setTreeMode('all'),
         }, translate('panel.allTrees')))
-      const rootItems = forest?.roots ?? []
-      const promotedItems = promoted.filter((entry) => index !== null && index.byId.has(entry.nodeId))
-      const allTreesNode = h('div', { className: 'tc-all-trees' },
-        h('div', { className: 'tc-all-hint' }, translate('panel.allTreesHint')),
-        forestLoading === true ? h('div', { className: 'tc-all-loading' }, translate('panel.loading')) : null,
-        forestError !== null ? h('div', { className: 'tc-side-error' }, `${translate('panel.error')}：${forestError}`) : null,
-        h('div', { className: 'tc-all-list' },
-          rootItems.map((root) => h('button', {
-            key: `root:${root.id}`,
-            type: 'button',
-            className: `tc-all-tree${root.id === data.rootId ? ' tc-all-tree--current' : ''}`,
-            onClick: () => openTreeRoot(root.id),
-          },
-            h('span', { className: 'tc-all-tree-name' }, root.title),
-            h('span', { className: 'tc-all-tree-meta' }, root.id === data.rootId ? translate('panel.currentBadge') : ''))),
-          promotedItems.map((entry) => h('button', {
-            key: `promoted:${entry.nodeId}`,
-            type: 'button',
-            className: `tc-all-tree tc-all-tree--promoted${entry.nodeId === viewRootId ? ' tc-all-tree--current' : ''}`,
-            onClick: () => openPromoted(entry),
-          },
-            h('span', { className: 'tc-all-tree-name' }, entry.label),
-            h('span', { className: 'tc-all-tree-meta' }, translate('panel.promotedBadge'))))),
-        rootItems.length === 0 && promotedItems.length === 0 && forestLoading !== true
-          ? h('div', { className: 'tc-empty' }, translate('panel.allTreesEmpty'))
-          : null)
+      const forestActiveId = forestIndex !== null && forest !== null && typeof forest.sessionId === 'string'
+        ? (forestIndex.leaves.get(forest.sessionId)?.id ?? null)
+        : null
+      const forestRunning = forestIndex === null ? { generating: new Set(), childGenerating: new Set() } : runningNodesOf(forestIndex)
+      const allTreesNode = forestDisplayIndex === null
+        ? h('div', { className: 'tc-all-loading' },
+            forestLoading === true ? translate('panel.loading') : forestError !== null ? `${translate('panel.error')}：${forestError}` : translate('panel.allTreesEmpty'))
+        : h('div', { className: 'tc-workspace tc-workspace--all' },
+            h(TreeCanvas, {
+              index: forestDisplayIndex,
+              layoutIndex: forestDisplayIndex,
+              hiddenIds: new Set(),
+              selectedId: null,
+              activeId: forestActiveId,
+              selectedPath: new Set(),
+              afterFor: () => ({ n: 0, onPath: false }),
+              chainByRep: null,
+              chainByMember: null,
+              onExpand: () => {},
+              onCollapse: () => {},
+              onSelect: (node) => {
+                if (promoted.some((entry) => entry.nodeId === node.id)) {
+                  setViewRootId(node.id)
+                  setTreeMode('current')
+                  setSelectedId(node.id)
+                  return
+                }
+                if (node.kind === 'root') openTreeRoot(node.sessionId)
+              },
+              sessionId,
+              rootId: forest.rootId,
+              locked: false,
+              focusNodeId: null,
+              generatingIds: forestRunning.generating,
+              childGeneratingIds: forestRunning.childGenerating,
+            }))
       return h('div', { className: `tc-panel tc-panel--${variant}`, 'aria-busy': treeLocked },
         h('div', { className: 'tc-head' },
           h('div', { className: 'tc-head-text' },
-            h('div', { className: 'tc-title' }, translate('panel.title')),
+            h('div', { className: 'tc-title', title: treeName }, treeName || translate('panel.title')),
             h('div', { className: 'tc-sub' }, `${fmt(translate('panel.turns'), { n: turns })} · ${fmt(translate('panel.branches'), { n: branches })}`)),
           modeSwitch,
           h('span', { className: 'tc-spacer' }),
@@ -3041,6 +3102,7 @@ window.__ModuleLoader__.load({
             : h('div', { className: 'tc-workspace' },
                 h(TreeCanvas, {
                   index: displayIndex ?? index,
+                  layoutIndex: index,
                   hiddenIds,
                   selectedId: displaySelectedId,
                   activeId: displayActiveId,
@@ -3065,6 +3127,7 @@ window.__ModuleLoader__.load({
                   afterOnPath: paneAfter.onPath,
                   isHere: paneIsHere,
                   isLeaf: paneIsLeaf,
+                  displayName: selectedNode !== null ? nodeNameOf(selectedNode) : '',
                   hasChildren: selectedNode !== null && (index.children.get(selectedNode.id)?.length ?? 0) > 0,
                   childCollapsed: selectedNode !== null && collapsedParents.has(selectedNode.id),
                   onToggleChildren: toggleChildren,

@@ -158,7 +158,43 @@ async function buildForest(ctx, sessionId) {
     })
   }
   roots.sort((left, right) => (right.createdAt ?? 0) - (left.createdAt ?? 0))
-  return { ok: true, sessionId, cwd, roots }
+  const nodes = new Map()
+  const sessions = new Map()
+  const labels = {}
+  const archived = new Set()
+  const errors = []
+  let treeTitle = ''
+  let rootId = null
+  const currentRoot = rootOf(target, byId)
+  for (const root of roots) {
+    try {
+      const tree = await buildTree(ctx, root.id)
+      if (root.id === currentRoot.header.id) {
+        treeTitle = tree.treeTitle
+        rootId = tree.rootId
+      }
+      for (const node of tree.nodes) nodes.set(node.id, node)
+      for (const session of tree.sessions) sessions.set(session.id, session)
+      Object.assign(labels, tree.labels ?? {})
+      for (const id of tree.archivedSessionIds ?? []) archived.add(id)
+      for (const error of tree.errors ?? []) errors.push(error)
+    } catch (error) {
+      errors.push({ sessionId: root.id, message: messageOf(error) })
+    }
+  }
+  return {
+    ok: true,
+    sessionId,
+    cwd,
+    rootId: rootId ?? roots[0]?.id ?? null,
+    treeTitle: treeTitle || roots[0]?.title || '',
+    roots,
+    nodes: [...nodes.values()],
+    sessions: [...sessions.values()],
+    labels,
+    archivedSessionIds: [...archived],
+    errors,
+  }
 }
 
 async function buildTree(ctx, sessionId) {
