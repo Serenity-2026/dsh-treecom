@@ -97,6 +97,10 @@ window.__ModuleLoader__.load({
       'path.root': '起点',
       'path.siblings': '兄弟分支',
       'notice.forkFailed': '分叉失败：{message}',
+      'notice.forkCreating': '正在创建分支…',
+      'notice.forkRefreshing': '分支创建成功，正在刷新对话树…',
+      'notice.forkDone': '分支已创建，对话树已刷新',
+      'notice.forkRefreshFailed': '分支已创建，但刷新对话树失败：{message}',
       'notice.switchFailed': '切换分支失败：{message}',
       'notice.running': '当前分支还在生成，等这一轮结束再切换。',
       'notice.busyFork': '这一轮还在生成，等它结束再分叉。',
@@ -173,6 +177,10 @@ window.__ModuleLoader__.load({
       'path.root': 'Start',
       'path.siblings': 'Sibling branches',
       'notice.forkFailed': 'Branch failed: {message}',
+      'notice.forkCreating': 'Creating branch…',
+      'notice.forkRefreshing': 'Branch created; refreshing the conversation tree…',
+      'notice.forkDone': 'Branch created and the tree is refreshed',
+      'notice.forkRefreshFailed': 'Branch created, but refreshing the tree failed: {message}',
       'notice.switchFailed': 'Could not switch branch: {message}',
       'notice.running': 'This branch is still generating; wait for the turn to finish.',
       'notice.busyFork': 'This turn is still generating; wait for it to finish before branching.',
@@ -1200,7 +1208,7 @@ window.__ModuleLoader__.load({
     }
 
     function TreeCanvas(props) {
-      const { index, hiddenIds, selectedId, activeId, selectedPath, afterFor, chainByRep, chainByMember, onExpand, onCollapse, onSelect, sessionId } = props
+      const { index, hiddenIds, selectedId, activeId, selectedPath, afterFor, chainByRep, chainByMember, onExpand, onCollapse, onSelect, sessionId, locked } = props
       const layout = useMemo(() => layoutTree(index, hiddenIds), [index, hiddenIds])
       const wrapRef = useRef(null)
       const [pan, setPan] = useState({ x: 0, y: 0 })
@@ -1366,6 +1374,9 @@ window.__ModuleLoader__.load({
         clearTipTimer()
         setTip(null)
       }
+      useEffect(() => {
+        if (locked === true) hideTipNow()
+      }, [locked])
 
       const scheduleHideTip = () => {
         clearTipTimer()
@@ -1380,7 +1391,7 @@ window.__ModuleLoader__.load({
       }
 
       const startDrag = (event) => {
-        if (event.button !== 0) return
+        if (locked === true || event.button !== 0) return
         if (isElement(event.target) && event.target.closest('.tc-canvas-node, .tc-canvas-toolbar, .tc-canvas-tip') !== null) return
         const wrap = wrapRef.current
         if (wrap === null) return
@@ -1591,7 +1602,7 @@ window.__ModuleLoader__.load({
 
       return h('div', {
         ref: wrapRef,
-        className: `tc-canvas-wrap${dragging ? ' tc-canvas-wrap--dragging' : ''}`,
+        className: `tc-canvas-wrap${dragging ? ' tc-canvas-wrap--dragging' : ''}${locked === true ? ' tc-canvas-wrap--locked' : ''}`,
         style: { backgroundPosition: `${pan.x}px ${pan.y}px` },
         onPointerDown: startDrag,
         onPointerMove: moveDrag,
@@ -1905,6 +1916,7 @@ window.__ModuleLoader__.load({
       const [overrides, setOverrides] = useState({})
       const [refreshing, setRefreshing] = useState(false)
       const [toast, setToast] = useState(null)
+      const [forkPhase, setForkPhase] = useState(null)
       const [selectedId, setSelectedId] = useState(null)
       const [collapsed, setCollapsed] = useState(() => new Set())
       const [expandedChains, setExpandedChains] = useState(() => new Set())
@@ -1979,7 +1991,7 @@ window.__ModuleLoader__.load({
       }, [data, index, liveSessions])
 
       const refreshNow = async () => {
-        if (refreshing) return
+        if (refreshing || busy || forkPhase !== null) return
         setRefreshing(true)
         try {
           await reload(true)
@@ -2044,9 +2056,21 @@ window.__ModuleLoader__.load({
           return
         }
         setBusy(true)
-        forkAt(node).catch((forkError) => {
-          setNotice(fmt(translate('notice.forkFailed'), { message: noticeText(forkError) }))
-        }).finally(() => setBusy(false))
+        setForkPhase('creating')
+        let created = false
+        forkAt(node).then(async () => {
+          created = true
+          setForkPhase('refreshing')
+          await reload(true)
+          setForkPhase(null)
+          showToast(translate('notice.forkDone'))
+        }).catch((forkError) => {
+          setForkPhase(null)
+          setNotice(fmt(translate(created ? 'notice.forkRefreshFailed' : 'notice.forkFailed'), { message: noticeText(forkError) }))
+        }).finally(() => {
+          setForkPhase(null)
+          setBusy(false)
+        })
       }
 
       const renameSessionTitle = async (targetSessionId, title) => {
@@ -2337,6 +2361,13 @@ window.__ModuleLoader__.load({
                 children.map((child) => renderBranch(child, depth + (children.length > 1 ? 1 : 0)))))
       }
 
+      const toastNode = forkPhase === null
+        ? (toast === null ? null : h('div', { className: 'tc-toast', role: 'status' }, toast))
+        : h('div', { className: 'tc-toast tc-toast--busy', role: 'status' },
+            h('span', { className: 'tc-spinner', 'aria-hidden': 'true' }),
+            forkPhase === 'creating' ? translate('notice.forkCreating') : translate('notice.forkRefreshing'))
+      const treeLocked = busy || refreshing || forkPhase !== null
+
       if (data === null) {
         return h('div', { className: `tc-panel tc-panel--${variant}` },
           h('div', { className: 'tc-head' },
@@ -2346,10 +2377,10 @@ window.__ModuleLoader__.load({
               label: translate('panel.refresh'),
               name: 'refresh',
               onClick: refreshNow,
-              disabled: refreshing,
+              disabled: treeLocked,
               spinning: refreshing,
             })),
-          toast === null ? null : h('div', { className: 'tc-toast', role: 'status' }, toast),
+          toastNode,
           h('div', { className: 'tc-empty' }, error === null ? translate('panel.loading') : `${translate('panel.error')}：${error}`))
       }
 
@@ -2366,7 +2397,7 @@ window.__ModuleLoader__.load({
       const paneIsLeaf = selectedNode !== null && index.leaves.get(selectedNode.sessionId)?.id === selectedNode.id
       const paneRunning = selectedNode !== null && index.sessionById.get(selectedNode.sessionId)?.running === true
       const paneArchived = selectedNode !== null && archivedIds.has(selectedNode.sessionId)
-      return h('div', { className: `tc-panel tc-panel--${variant}`, 'aria-busy': busy || refreshing },
+      return h('div', { className: `tc-panel tc-panel--${variant}`, 'aria-busy': treeLocked },
         h('div', { className: 'tc-head' },
           h('div', { className: 'tc-head-text' },
             h('div', { className: 'tc-title' }, translate('panel.title')),
@@ -2376,14 +2407,14 @@ window.__ModuleLoader__.load({
             label: translate('panel.refresh'),
             name: 'refresh',
             onClick: refreshNow,
-            disabled: refreshing,
+            disabled: treeLocked,
             spinning: refreshing,
           })),
         busy ? h('div', { className: 'tc-notice tc-notice--busy' }, translate('action.busy')) : null,
         notice === null ? null : h('div', { className: 'tc-notice' }, notice),
         error === null ? null : h('div', { className: 'tc-notice' }, `${translate('panel.error')}：${error}`),
         data.errors !== undefined && data.errors.length > 0 ? h('div', { className: 'tc-warn' }, translate('panel.partial')) : null,
-        toast === null ? null : h('div', { className: 'tc-toast', role: 'status' }, toast),
+        toastNode,
         h('div', { className: 'tc-body', 'aria-label': translate('panel.title') },
           visibleNodes.length === 0
             ? h('div', { className: 'tc-empty' }, allArchived ? translate('panel.allArchived') : translate('panel.empty'))
@@ -2401,6 +2432,7 @@ window.__ModuleLoader__.load({
                   onCollapse: collapseAbove,
                   onSelect: (node) => setSelectedId(node.id),
                   sessionId,
+                  locked: treeLocked,
                 }),
                 h(NodeDetailPane, {
                   node: paneNode,
@@ -2603,6 +2635,9 @@ body.tc-view-tree-open [data-width-handle]::after{display:none!important}
 .tc-sidebar-body .tc-chat-bubble,.tc-sidebar-body .tc-chat-bubble--user{max-height:92px}
 .tc-sidebar-body .tc-chat-bubble--assistant{max-height:168px}
 .tc-toast{position:absolute;top:46px;left:50%;transform:translateX(-50%);z-index:5;padding:5px 10px;border-radius:999px;background:var(--dsw-alias-bg-layer-3);border:1px solid var(--dsw-alias-border-l2);color:var(--dsw-alias-label-primary);box-shadow:var(--dsw-elevation-panel);font-size:11px;white-space:nowrap;pointer-events:none;animation:tc-toast-in .15s ease-out}
+.tc-toast--busy{display:inline-flex;align-items:center;gap:6px;max-width:calc(100% - 20px);white-space:normal;text-align:center}
+.tc-spinner{flex:0 0 auto;width:10px;height:10px;border:2px solid var(--dsw-alias-border-l2);border-top-color:var(--dsw-alias-state-business-primary);border-radius:50%;display:inline-block;animation:tc-spin .8s linear infinite}
+.tc-canvas-wrap--locked{pointer-events:none;cursor:progress}
 @keyframes tc-toast-in{from{opacity:0;transform:translate(-50%,-4px)}to{opacity:1;transform:translate(-50%,0)}}
 .tc-open-btn{display:inline-flex;align-items:center;gap:5px;height:28px;padding:0 8px;border:1px solid var(--dsw-alias-border-l1);border-radius:6px;background:transparent;color:var(--dsw-alias-label-secondary);font:inherit;font-size:12px;cursor:pointer}
 .tc-open-btn:hover{background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-primary)}

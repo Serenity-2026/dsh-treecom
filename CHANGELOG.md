@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Forking a node now shows a persistent “branch created, refreshing the tree…” toast with a spinner, locks tree interactions until the forced refresh finishes, and then reports success.
 - Forking from a tree node now keeps the current conversation tree open (no unarchive/open-session focus) instead of switching to the newly created child conversation.
 - Newly visible tree nodes and their edges animate out from their parent node instead of appearing abruptly.
 
