@@ -3824,10 +3824,11 @@ body.tc-view-tree-open [data-width-handle]::after{display:none!important}
           return () => style.remove()
         }, 'treecom: styles')
 
-        const sessionService = ctx.get('sessions')
-        if (sessionService) {
+        ctx.inject(['sessions'], (sessionScope) => {
+          const sessionService = sessionScope.get('sessions')
+          if (!sessionService) return
           ctx.effect(() => installSidebarTreeGrouping(sessionService), 'treecom: grouped session sidebar')
-        }
+        })
 
         ctx.slots.inject('conversation.view', () => ctx.slots.register({
           name: 'conversation.view',
