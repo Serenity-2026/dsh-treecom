@@ -3089,7 +3089,7 @@ window.__ModuleLoader__.load({
           onClick: () => setTreeMode('all'),
         }, translate('panel.allTrees')))
       const rootItems = forest?.roots ?? []
-      const promotedItems = promoted.filter((entry) => index !== null && index.byId.has(entry.nodeId))
+      const promotedItems = []
       const allTreesNode = h('div', { className: 'tc-all-trees' },
         h('div', { className: 'tc-all-hint' }, translate('panel.allTreesHint')),
         forestLoading === true ? h('div', { className: 'tc-all-loading' }, translate('panel.loading')) : null,
@@ -3641,94 +3641,102 @@ body.tc-view-tree-open [data-width-handle]::after{display:none!important}
             row.removeAttribute('data-treecom-left-root')
             row.classList.remove('tc-left-tree-row--collapsed')
           }
-          const parents = new Map()
-          for (const row of rows) {
-            const parent = row.parentElement
-            if (parent === null) continue
-            const listRows = parents.get(parent) ?? []
-            listRows.push(row)
-            parents.set(parent, listRows)
-          }
           const currentRoot = selectedRoot(byId)
-          for (const [parent, parentRows] of parents) {
-            const groups = new Map()
-            for (const row of parentRows) {
-              const id = row.getAttribute('data-row-key')?.slice('session:'.length)
-              if (typeof id !== 'string' || byId[id] === undefined) continue
-              const root = rootBySession.get(id) ?? rootOf(id, byId)
-              const group = groups.get(root) ?? { root, rows: [] }
-              group.rows.push(row)
-              groups.set(root, group)
+          let scope = null
+          const roleTree = rows[0]?.closest('[role="tree"]') ?? null
+          if (roleTree !== null && rows.every((row) => roleTree.contains(row))) scope = roleTree
+          if (scope === null) {
+            scope = rows[0]?.parentElement ?? null
+            while (scope !== null && !rows.every((row) => scope.contains(row))) scope = scope.parentElement
+          }
+          if (scope === null || scope === document.body || scope === document.documentElement) return
+          const itemOf = (row) => {
+            let item = row
+            while (item.parentElement !== null && item.parentElement !== scope) item = item.parentElement
+            return item.parentElement === scope ? item : null
+          }
+          const groups = new Map()
+          const firstItems = []
+          for (const row of rows) {
+            const id = row.getAttribute('data-row-key')?.slice('session:'.length)
+            if (typeof id !== 'string' || byId[id] === undefined) continue
+            const root = rootBySession.get(id) ?? rootOf(id, byId)
+            const item = itemOf(row)
+            if (item === null) continue
+            if (!firstItems.includes(item)) firstItems.push(item)
+            const group = groups.get(root) ?? { root, items: [], rows: [] }
+            if (!group.items.includes(item)) group.items.push(item)
+            group.rows.push(row)
+            groups.set(root, group)
+          }
+          if (groups.size === 0) return
+          const ordered = [...groups.values()].sort((left, right) => {
+            if (left.root === currentRoot) return -1
+            if (right.root === currentRoot) return 1
+            return (byId[right.root]?.updatedAt ?? 0) - (byId[left.root]?.updatedAt ?? 0)
+          })
+          const first = firstItems[0]
+          if (first === undefined) return
+          const anchor = document.createComment('treecom-left-anchor')
+          scope.insertBefore(anchor, first)
+          const fragment = document.createDocumentFragment()
+          for (const group of ordered) {
+            const rootSession = byId[group.root]
+            const title = rootSession?.displayTitle || rootSession?.title || titleByRoot.get(group.root) || group.root
+            const isCollapsed = collapsed.has(group.root)
+            const head = document.createElement('div')
+            head.className = `tc-left-tree-head${group.root === currentRoot ? ' tc-left-tree-head--current' : ''}${isCollapsed ? ' tc-left-tree-head--collapsed' : ''}`
+            head.setAttribute('data-treecom-left-head', group.root)
+            head.setAttribute('role', 'button')
+            head.setAttribute('tabindex', '0')
+            head.title = title
+            const chevron = document.createElement('span')
+            chevron.className = 'tc-left-tree-chevron'
+            chevron.textContent = '▸'
+            const folder = document.createElement('span')
+            folder.className = 'tc-left-tree-folder'
+            folder.innerHTML = folderSvg()
+            const name = document.createElement('span')
+            name.className = 'tc-left-tree-name'
+            name.textContent = title
+            const count = document.createElement('span')
+            count.className = 'tc-left-tree-count'
+            count.textContent = String(group.rows.length)
+            head.append(chevron)
+            if (group.root === currentRoot) {
+              const dot = document.createElement('span')
+              dot.className = 'tc-left-tree-dot'
+              dot.title = translate('node.youAreHere')
+              head.append(dot)
             }
-            if (groups.size === 0) continue
-            const ordered = [...groups.values()].sort((left, right) => {
-              if (left.root === currentRoot) return -1
-              if (right.root === currentRoot) return 1
-              return (byId[right.root]?.updatedAt ?? 0) - (byId[left.root]?.updatedAt ?? 0)
-            })
-            const first = parentRows.find((row) => row.parentElement === parent) ?? null
-            if (first === null) continue
-            const anchor = document.createComment('treecom-left-anchor')
-            parent.insertBefore(anchor, first)
-            const fragment = document.createDocumentFragment()
-            for (const group of ordered) {
-              const rootSession = byId[group.root]
-              const title = titleByRoot.get(group.root) || rootSession?.displayTitle || rootSession?.title || group.root
-              const isCollapsed = collapsed.has(group.root)
-              const head = document.createElement('div')
-              head.className = `tc-left-tree-head${group.root === currentRoot ? ' tc-left-tree-head--current' : ''}${isCollapsed ? ' tc-left-tree-head--collapsed' : ''}`
-              head.setAttribute('data-treecom-left-head', group.root)
-              head.setAttribute('role', 'button')
-              head.setAttribute('tabindex', '0')
-              head.title = title
-              const chevron = document.createElement('span')
-              chevron.className = 'tc-left-tree-chevron'
-              chevron.textContent = '▸'
-              const folder = document.createElement('span')
-              folder.className = 'tc-left-tree-folder'
-              folder.innerHTML = folderSvg()
-              const name = document.createElement('span')
-              name.className = 'tc-left-tree-name'
-              name.textContent = title
-              const count = document.createElement('span')
-              count.className = 'tc-left-tree-count'
-              count.textContent = String(group.rows.length)
-              head.append(chevron)
-              if (group.root === currentRoot) {
-                const dot = document.createElement('span')
-                dot.className = 'tc-left-tree-dot'
-                dot.title = translate('node.youAreHere')
-                head.append(dot)
-              }
-              head.append(folder, name, count)
-              const toggle = (event) => {
-                if (event !== undefined) { event.preventDefault(); event.stopPropagation() }
-                if (collapsed.has(group.root)) collapsed.delete(group.root)
-                else collapsed.add(group.root)
-                saveCollapsed()
-                const nowCollapsed = collapsed.has(group.root)
-                head.classList.toggle('tc-left-tree-head--collapsed', nowCollapsed)
-                for (const row of document.querySelectorAll('[data-treecom-left-root]')) {
-                  if (row.getAttribute('data-treecom-left-root') === group.root) {
-                    row.classList.toggle('tc-left-tree-row--collapsed', nowCollapsed)
-                  }
+            head.append(folder, name, count)
+            const toggle = (event) => {
+              if (event !== undefined) { event.preventDefault(); event.stopPropagation() }
+              if (collapsed.has(group.root)) collapsed.delete(group.root)
+              else collapsed.add(group.root)
+              saveCollapsed()
+              const nowCollapsed = collapsed.has(group.root)
+              head.classList.toggle('tc-left-tree-head--collapsed', nowCollapsed)
+              for (const row of document.querySelectorAll('[data-treecom-left-root]')) {
+                if (row.getAttribute('data-treecom-left-root') === group.root) {
+                  row.classList.toggle('tc-left-tree-row--collapsed', nowCollapsed)
                 }
               }
-              head.addEventListener('click', toggle)
-              head.addEventListener('keydown', (event) => {
-                if (event.key === 'Enter' || event.key === ' ') toggle(event)
-              })
-              fragment.append(head)
-              for (const row of group.rows) {
-                row.setAttribute('data-treecom-left-row', 'true')
-                row.setAttribute('data-treecom-left-root', group.root)
-                row.classList.toggle('tc-left-tree-row--collapsed', isCollapsed)
-                fragment.append(row)
-              }
             }
-            parent.insertBefore(fragment, anchor)
-            anchor.remove()
+            head.addEventListener('click', toggle)
+            head.addEventListener('keydown', (event) => {
+              if (event.key === 'Enter' || event.key === ' ') toggle(event)
+            })
+            fragment.append(head)
+            for (const row of group.rows) {
+              row.setAttribute('data-treecom-left-row', 'true')
+              row.setAttribute('data-treecom-left-root', group.root)
+              row.classList.toggle('tc-left-tree-row--collapsed', isCollapsed)
+            }
+            for (const item of group.items) fragment.append(item)
           }
+          scope.insertBefore(fragment, anchor)
+          anchor.remove()
           /* Exactly one folder carries the current-tree dot. */
           const liveCurrentRoot = selectedRoot(byId)
           for (const head of document.querySelectorAll('.tc-left-tree-head')) {

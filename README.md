@@ -121,7 +121,7 @@ Select a node that has children and use 「收起子节点 / 展开子节点」 
 
 Long-press a non-root node on the canvas and drag it to the top drop banner (「拖到这里，设为新树根」). This creates a new tree view rooted at that node and keeps the original tree intact. The promoted root is stored per folder and listed in the all-trees list.
 
-Use the header switcher to choose 「当前对话树」 (default) or 「全部对话树」. The all-trees view is a list of every root conversation tree in the same folder plus promoted trees; clicking an item opens that tree. The all-trees list uses the new Host `forest` action, so restart the Host once after updating.
+Use the header switcher to choose 「当前对话树」 (default) or 「全部对话树」. The all-trees view is a list of every root conversation tree in the same folder (promoted views are not separate session trees); clicking an item opens that tree. The all-trees list uses the new Host `forest` action, so restart the Host once after updating.
 
 The tree title is the name of its root node. In the detail header, each node is titled by its own name; an unnamed turn defaults to the first 10 characters of its question followed by an ellipsis.
 
