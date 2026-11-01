@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- The left conversation sidebar now groups sessions by conversation tree. Each root has a folder row that expands/collapses all of its forks, and the folder of the tree containing the selected conversation shows a small green dot.
+
 - Parent nodes now expose collapse/expand-children in the detail header. Collapsing a parent hides its whole subtree; expanding it restores the nested collapse state of its children, so a previously expanded child stays expanded. The canvas is laid out from the full tree, so ancestors above a collapsed/expanded node do not move.
 - Long-press a non-root node and drag it to the top drop banner to promote it to a new tree root. Promoted roots are stored per folder and listed in the all-trees list.
 - The tree header now switches between the current conversation tree (default) and a list of every root conversation tree in the same folder (new host `forest` action); clicking an item opens that tree.

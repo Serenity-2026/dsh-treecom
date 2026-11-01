@@ -3523,7 +3523,214 @@ body.tc-view-tree-open [data-width-handle]::after{display:none!important}
 @media (max-width:980px){.tc-side,.tc-panel--view .tc-side{flex-basis:320px;width:320px}}
 @media (max-width:760px){.tc-workspace{flex-direction:column}.tc-canvas-wrap{flex:1 1 auto;min-height:220px}.tc-side,.tc-panel--view .tc-side{flex:0 0 45%;width:100%;border-left:0;border-top:1px solid var(--dsw-alias-border-l1)}}
 
+.tc-left-tree-head{display:flex;align-items:center;gap:6px;min-width:0;margin:2px 4px 1px;padding:4px 6px;border-radius:6px;color:var(--dsw-alias-label-secondary);font:inherit;font-size:11.5px;font-weight:600;line-height:18px;cursor:pointer;user-select:none;outline:none}
+.tc-left-tree-head:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}
+.tc-left-tree-head:focus-visible{box-shadow:0 0 0 2px var(--dsw-alias-state-business-primary)}
+.tc-left-tree-head--current{color:var(--dsw-alias-label-primary)}
+.tc-left-tree-chevron{flex:none;width:12px;color:var(--dsw-alias-label-tertiary);font-size:11px;transform:rotate(90deg);transition:transform .15s ease}
+.tc-left-tree-head--collapsed .tc-left-tree-chevron{transform:rotate(0)}
+.tc-left-tree-folder{flex:none;display:inline-flex;align-items:center;justify-content:center;color:var(--dsw-alias-label-secondary)}
+.tc-left-tree-name{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.tc-left-tree-count{flex:none;margin-left:auto;color:var(--dsw-alias-label-tertiary);font-size:10px;font-weight:500;font-variant-numeric:tabular-nums}
+.tc-left-tree-dot{flex:none;width:6px;height:6px;border-radius:50%;background:var(--dsw-alias-state-success-primary);box-shadow:0 0 0 2px color-mix(in srgb,var(--dsw-alias-state-success-primary) 18%,transparent)}
+[data-treecom-left-row="true"]{margin-left:16px;width:calc(100% - 16px);box-sizing:border-box}
+[data-treecom-left-row="true"].tc-left-tree-row--collapsed{display:none!important}
+
 `
+
+    /* ------------------------------------------- grouped left sidebar -- */
+
+    const SIDEBAR_COLLAPSED_KEY = 'treecom:sidebar-trees-collapsed'
+
+    function installSidebarTreeGrouping(sessions) {
+      if (typeof document === 'undefined' || typeof window === 'undefined') return () => {}
+      const list = sessions?.list
+      if (!list || typeof list.getSnapshot !== 'function') return () => {}
+      let disposed = false
+      let scheduled = false
+      let applying = false
+      let collapsed = new Set()
+      try {
+        const raw = localStorage.getItem(SIDEBAR_COLLAPSED_KEY)
+        const value = raw === null ? [] : JSON.parse(raw)
+        if (Array.isArray(value)) collapsed = new Set(value.filter((id) => typeof id === 'string'))
+      } catch { /* private mode */ }
+
+      const rootOf = (id, byId) => {
+        let current = id
+        const seen = new Set()
+        for (;;) {
+          if (seen.has(current)) return current
+          seen.add(current)
+          const parent = byId[current]?.parentId
+          if (typeof parent !== 'string' || parent === current || byId[parent] === undefined) return current
+          current = parent
+        }
+      }
+      const selectedRoot = (byId) => {
+        const selected = document.querySelector('[data-row-key^="session:"][aria-selected="true"]')
+        const id = selected?.getAttribute('data-row-key')?.slice('session:'.length)
+        return typeof id === 'string' && byId[id] !== undefined ? rootOf(id, byId) : null
+      }
+      const saveCollapsed = () => {
+        try { localStorage.setItem(SIDEBAR_COLLAPSED_KEY, JSON.stringify([...collapsed])) } catch { /* private mode */ }
+      }
+      const folderSvg = () => '<svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.25" aria-hidden="true"><path d="M2.4 4.6h3.8l1.1 1.4h6.3v6.2a1 1 0 0 1-1 1h-9.2a1 1 0 0 1-1-1z"/><path d="M2.4 6.1h11.2"/></svg>'
+
+      const apply = () => {
+        if (disposed) return
+        applying = true
+        try {
+          const snapshot = list.getSnapshot()
+          const byId = snapshot?.byId ?? {}
+          for (const old of document.querySelectorAll('[data-treecom-left-head]')) old.remove()
+          const rows = [...document.querySelectorAll('[data-row-key^="session:"]')]
+          for (const row of rows) {
+            row.removeAttribute('data-treecom-left-row')
+            row.removeAttribute('data-treecom-left-root')
+            row.classList.remove('tc-left-tree-row--collapsed')
+          }
+          const parents = new Map()
+          for (const row of rows) {
+            const parent = row.parentElement
+            if (parent === null) continue
+            const listRows = parents.get(parent) ?? []
+            listRows.push(row)
+            parents.set(parent, listRows)
+          }
+          const currentRoot = selectedRoot(byId)
+          for (const [parent, parentRows] of parents) {
+            const groups = new Map()
+            for (const row of parentRows) {
+              const id = row.getAttribute('data-row-key')?.slice('session:'.length)
+              if (typeof id !== 'string' || byId[id] === undefined) continue
+              const root = rootOf(id, byId)
+              const group = groups.get(root) ?? { root, rows: [] }
+              group.rows.push(row)
+              groups.set(root, group)
+            }
+            if (groups.size === 0) continue
+            const ordered = [...groups.values()].sort((left, right) => {
+              if (left.root === currentRoot) return -1
+              if (right.root === currentRoot) return 1
+              return (byId[right.root]?.updatedAt ?? 0) - (byId[left.root]?.updatedAt ?? 0)
+            })
+            const first = parentRows.find((row) => row.parentElement === parent) ?? null
+            if (first === null) continue
+            const anchor = document.createComment('treecom-left-anchor')
+            parent.insertBefore(anchor, first)
+            const fragment = document.createDocumentFragment()
+            for (const group of ordered) {
+              const rootSession = byId[group.root]
+              const title = rootSession?.displayTitle || rootSession?.title || group.root
+              const isCollapsed = collapsed.has(group.root)
+              const head = document.createElement('div')
+              head.className = `tc-left-tree-head${group.root === currentRoot ? ' tc-left-tree-head--current' : ''}${isCollapsed ? ' tc-left-tree-head--collapsed' : ''}`
+              head.setAttribute('data-treecom-left-head', group.root)
+              head.setAttribute('role', 'button')
+              head.setAttribute('tabindex', '0')
+              head.title = title
+              const chevron = document.createElement('span')
+              chevron.className = 'tc-left-tree-chevron'
+              chevron.textContent = '▸'
+              const folder = document.createElement('span')
+              folder.className = 'tc-left-tree-folder'
+              folder.innerHTML = folderSvg()
+              const name = document.createElement('span')
+              name.className = 'tc-left-tree-name'
+              name.textContent = title
+              const count = document.createElement('span')
+              count.className = 'tc-left-tree-count'
+              count.textContent = String(group.rows.length)
+              head.append(chevron)
+              if (group.root === currentRoot) {
+                const dot = document.createElement('span')
+                dot.className = 'tc-left-tree-dot'
+                dot.title = translate('node.youAreHere')
+                head.append(dot)
+              }
+              head.append(folder, name, count)
+              const toggle = (event) => {
+                if (event !== undefined) { event.preventDefault(); event.stopPropagation() }
+                if (collapsed.has(group.root)) collapsed.delete(group.root)
+                else collapsed.add(group.root)
+                saveCollapsed()
+                const nowCollapsed = collapsed.has(group.root)
+                head.classList.toggle('tc-left-tree-head--collapsed', nowCollapsed)
+                for (const row of document.querySelectorAll('[data-treecom-left-root]')) {
+                  if (row.getAttribute('data-treecom-left-root') === group.root) {
+                    row.classList.toggle('tc-left-tree-row--collapsed', nowCollapsed)
+                  }
+                }
+              }
+              head.addEventListener('click', toggle)
+              head.addEventListener('keydown', (event) => {
+                if (event.key === 'Enter' || event.key === ' ') toggle(event)
+              })
+              fragment.append(head)
+              for (const row of group.rows) {
+                row.setAttribute('data-treecom-left-row', 'true')
+                row.setAttribute('data-treecom-left-root', group.root)
+                row.classList.toggle('tc-left-tree-row--collapsed', isCollapsed)
+                fragment.append(row)
+              }
+            }
+            parent.insertBefore(fragment, anchor)
+            anchor.remove()
+          }
+        } finally {
+          if (typeof requestAnimationFrame === 'function') {
+            requestAnimationFrame(() => { applying = false })
+          } else {
+            setTimeout(() => { applying = false }, 0)
+          }
+        }
+      }
+
+      const schedule = () => {
+        if (disposed || scheduled) return
+        scheduled = true
+        const run = () => {
+          scheduled = false
+          apply()
+        }
+        if (typeof requestAnimationFrame === 'function') requestAnimationFrame(run)
+        else setTimeout(run, 0)
+      }
+
+      const observer = new MutationObserver((mutations) => {
+        if (applying) return
+        for (const mutation of mutations) {
+          if (mutation.type === 'attributes' && mutation.attributeName === 'aria-selected') {
+            schedule()
+            return
+          }
+          if (mutation.type === 'childList') {
+            schedule()
+            return
+          }
+        }
+      })
+      observer.observe(document.body, {
+        subtree: true,
+        childList: true,
+        attributes: true,
+        attributeFilter: ['aria-selected'],
+      })
+      const unsubscribe = typeof list.subscribe === 'function' ? list.subscribe(schedule) : () => {}
+      schedule()
+      return () => {
+        disposed = true
+        observer.disconnect()
+        unsubscribe()
+        for (const old of document.querySelectorAll('[data-treecom-left-head]')) old.remove()
+        for (const row of document.querySelectorAll('[data-treecom-left-row]')) {
+          row.removeAttribute('data-treecom-left-row')
+          row.removeAttribute('data-treecom-left-root')
+          row.classList.remove('tc-left-tree-row--collapsed')
+        }
+      }
+    }
 
     /* ----------------------------------------------------------- apply -- */
 
@@ -3546,6 +3753,11 @@ body.tc-view-tree-open [data-width-handle]::after{display:none!important}
           document.head.appendChild(style)
           return () => style.remove()
         }, 'treecom: styles')
+
+        const sessionService = ctx.get('sessions')
+        if (sessionService) {
+          ctx.effect(() => installSidebarTreeGrouping(sessionService), 'treecom: grouped session sidebar')
+        }
 
         ctx.slots.inject('conversation.view', () => ctx.slots.register({
           name: 'conversation.view',
