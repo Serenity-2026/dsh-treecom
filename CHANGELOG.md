@@ -2,6 +2,7 @@
 
 ## 1.0.0 — 2026-11-01
 
+- Faster tree loading: session snapshots are read in parallel and cached by session revision, and the finished tree payload is reused while the family is unchanged. Manual refresh bypasses both caches and re-reads the sessions.
 - The green dot on the current tree folder now pulses while that tree is generating and returns to a steady dot when generation stops.
 - The 居中 button now fits and centers the whole tree into the viewport instead of centering at the current zoom, so the tree no longer ends up off-screen in an empty area.
 - All-trees now hides archived roots, so a deleted tree disappears from the list immediately; deleting a tree archives every session and removes the row from both entry points.

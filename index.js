@@ -23,6 +23,8 @@ import { dirname, join } from 'node:path'
 const ROUTE = '/treecom'
 const STATE_VERSION = 1
 const SNAPSHOT_TTL_MS = 15_000
+const SNAPSHOT_CACHE_MAX = 64
+const TREE_CACHE_MAX = 16
 const LABEL_LIMIT = 120
 const DETAIL_LIMIT = 24_000
 
@@ -48,7 +50,8 @@ async function handle(ctx, request, response) {
         respond(response, 400, { error: 'sessionId 必须是非空字符串' })
         return
       }
-      respond(response, 200, await buildTree(ctx, sessionId))
+      const fresh = url.searchParams.get('fresh') === '1'
+      respond(response, 200, await buildTree(ctx, sessionId, fresh))
       return
     }
     if (request.method === 'POST') {
@@ -205,11 +208,11 @@ async function buildForest(ctx, sessionId) {
     if (list === undefined) idsByRoot.set(owner, [header.id])
     else list.push(header.id)
   }
-  for (const root of roots) {
+  await Promise.all(roots.map(async (root) => {
     root.sessionIds = idsByRoot.get(root.id) ?? [root.id]
     root.sessionCount = root.sessionIds.length
     const record = byId.get(root.id)
-    if (record === undefined) continue
+    if (record === undefined) return
     try {
       const snapshot = await readSnapshot(ctx, record)
       const turns = cachedTurns(root.id, snapshot.events)
@@ -217,11 +220,21 @@ async function buildForest(ctx, sessionId) {
     } catch {
       /* keep the catalogue title / short id */
     }
-  }
+  }))
   return { ok: true, sessionId, cwd, roots }
 }
 
-async function buildTree(ctx, sessionId) {
+function familyRevision(ctx, family, state, archived, sessionId, rootId) {
+  const sessions = family.map((record) => {
+    const live = ctx.sessions.get(record.header.id)
+    const updatedAt = record.updatedAt ?? record.header.updatedAt ?? ''
+    const title = record.title ?? record.header.title ?? ''
+    return `${record.header.id}:${updatedAt}:${title}:${live?.seq ?? ''}:${isRunning(ctx, record.header.id) ? 'r' : '-'}`
+  })
+  return `${sessionId}|${rootId}|${sessions.join('|')}|${JSON.stringify(state.labels)}|${[...archived].sort().join(',')}`
+}
+
+async function buildTree(ctx, sessionId, fresh = false) {
   const records = await ctx.sessionQuery.listSessions()
   const byId = new Map(records.map((record) => [record.header.id, record]))
   let target = byId.get(sessionId)
@@ -238,15 +251,30 @@ async function buildTree(ctx, sessionId) {
   const family = familyOf(root, records)
   if (!family.some((record) => record.header.id === sessionId)) family.push(target)
 
+  const state = await readState()
+  const archived = new Set(ctx.get?.('workspaceRegistry')?.archivedSessionIds ?? [])
+  const rootId = root.header.id
+  const revision = familyRevision(ctx, family, state, archived, sessionId, rootId)
+  const reliable = family.every((record) => ctx.sessions.get(record.header.id) !== undefined
+    || (record.updatedAt ?? record.header.updatedAt) !== undefined)
+  const cacheTtl = reliable ? Infinity : SNAPSHOT_TTL_MS
+  const cachedTree = fresh ? undefined : treeCache.get(sessionId)
+  if (cachedTree !== undefined && cachedTree.key === revision && Date.now() - cachedTree.at < cachedTree.ttl) {
+    treeCache.delete(sessionId)
+    treeCache.set(sessionId, cachedTree)
+    return cachedTree.payload
+  }
+
   const snapshots = new Map()
   const errors = []
-  for (const record of family) {
+  await Promise.all(family.map(async (record) => {
     try {
-      snapshots.set(record.header.id, await readSnapshot(ctx, record))
+      const snapshot = await readSnapshot(ctx, record, fresh)
+      snapshots.set(record.header.id, snapshot)
     } catch (error) {
       errors.push({ sessionId: record.header.id, message: messageOf(error) })
     }
-  }
+  }))
   if (!snapshots.has(sessionId)) {
     const detail = errors.find((entry) => entry.sessionId === sessionId)
     throw new Error(detail === undefined ? `读不到会话 ${sessionId}` : `读不到会话 ${sessionId}: ${detail.message}`)
@@ -255,7 +283,6 @@ async function buildTree(ctx, sessionId) {
   const turnsBySession = new Map()
   for (const [id, snapshot] of snapshots) turnsBySession.set(id, cachedTurns(id, snapshot.events))
 
-  const rootId = root.header.id
   const rootSnapshot = snapshots.get(rootId)
   const treeTitle = rootSnapshot === undefined
     ? shortId(rootId)
@@ -334,8 +361,6 @@ async function buildTree(ctx, sessionId) {
     }
   }
 
-  const state = await readState()
-  const archived = new Set(ctx.get?.('workspaceRegistry')?.archivedSessionIds ?? [])
   for (const node of nodes) {
     if (node.kind !== 'root' && typeof state.labels[node.id] === 'string') node.label = state.labels[node.id]
   }
@@ -359,7 +384,7 @@ async function buildTree(ctx, sessionId) {
       }
     })
 
-  return {
+  const payload = {
     ok: true,
     sessionId,
     rootId,
@@ -371,6 +396,15 @@ async function buildTree(ctx, sessionId) {
     archivedSessionIds: [...archived],
     errors,
   }
+  if (errors.length === 0) {
+    treeCache.set(sessionId, { key: revision, at: Date.now(), ttl: cacheTtl, payload })
+    while (treeCache.size > TREE_CACHE_MAX) {
+      const oldest = treeCache.keys().next().value
+      if (oldest === undefined) break
+      treeCache.delete(oldest)
+    }
+  }
+  return payload
 }
 
 /** The topmost surviving ancestor. A missing parent ends the walk at the last known session. */
@@ -741,13 +775,20 @@ function isRunning(ctx, sessionId) {
 /* ---------------------------------------------------------- snapshots -- */
 
 const snapshotCache = new Map()
+const treeCache = new Map()
 
-async function readSnapshot(ctx, record) {
+async function readSnapshot(ctx, record, force = false) {
   const id = record.header.id
   const live = ctx.sessions.get(id)
-  const key = live === undefined ? 'persisted' : `live:${live.seq}`
+  const updatedAt = record.updatedAt ?? record.header.updatedAt
+  const key = live === undefined
+    ? `persisted:${updatedAt ?? 'unknown'}`
+    : `live:${live.seq}`
+  const ttl = live === undefined && updatedAt === undefined ? SNAPSHOT_TTL_MS : Infinity
   const cached = snapshotCache.get(id)
-  if (cached !== undefined && cached.key === key && Date.now() - cached.at < SNAPSHOT_TTL_MS) {
+  if (force !== true && cached !== undefined && cached.key === key && Date.now() - cached.at < ttl) {
+    snapshotCache.delete(id)
+    snapshotCache.set(id, cached)
     return cached.snapshot
   }
   const snapshot = live === undefined
@@ -759,6 +800,11 @@ async function readSnapshot(ctx, record) {
         events: live.snapshotEvents(),
       }
   snapshotCache.set(id, { key, at: Date.now(), snapshot })
+  while (snapshotCache.size > SNAPSHOT_CACHE_MAX) {
+    const oldest = snapshotCache.keys().next().value
+    if (oldest === undefined) break
+    snapshotCache.delete(oldest)
+  }
   return snapshot
 }
 

@@ -317,20 +317,22 @@ window.__ModuleLoader__.load({
     const inflight = new Map()
     const treeDataCache = new Map()
 
-    function fetchTree(sessionId) {
-      const existing = inflight.get(sessionId)
+    function fetchTree(sessionId, force = false) {
+      const requestKey = force ? `${sessionId}:fresh` : sessionId
+      const existing = inflight.get(requestKey)
       if (existing !== undefined) return existing
       const promise = (async () => {
-        const response = await fetch(`${ROUTE}?sessionId=${encodeURIComponent(sessionId)}`, { cache: 'no-store' })
+        const query = `sessionId=${encodeURIComponent(sessionId)}${force ? '&fresh=1' : ''}`
+        const response = await fetch(`${ROUTE}?${query}`, { cache: 'no-store' })
         const body = await response.json().catch(() => null)
         if (!response.ok || body === null || body.ok !== true) {
           throw new Error(body !== null && typeof body.error === 'string' ? body.error : `HTTP ${response.status}`)
         }
         return body
       })()
-      inflight.set(sessionId, promise)
+      inflight.set(requestKey, promise)
       promise.finally(() => {
-        if (inflight.get(sessionId) === promise) inflight.delete(sessionId)
+        if (inflight.get(requestKey) === promise) inflight.delete(requestKey)
       }).catch(() => {})
       return promise
     }
@@ -429,7 +431,7 @@ window.__ModuleLoader__.load({
           inflight.delete(sessionId)
         }
         try {
-          const data = await fetchTree(sessionId)
+          const data = await fetchTree(sessionId, force)
           treeDataCache.set(sessionId, { data, revision: revisionRef.current })
           if (generation.current === token) setState({ sessionId, loading: false, data, error: null })
           return data
