@@ -112,3 +112,13 @@ MIT © 2026 Minchuan Deng
 ### Ask a blank branch from the tree
 
 Select a newly forked “新分支 / 等待提问” node, type directly into the 提问 box in the right detail pane, and press Enter. The question is sent to that branch’s own session, the current branch switches to the new turn (the green dot moves), the 对话树 tab is reopened, and the answer streams into the same 回答 box. The child tree is prefetched before the switch so it appears instantly.
+
+### Collapse parent subtrees
+
+Select a node that has children and use 「收起子节点 / 展开子节点」 in its detail header. Collapsing hides the complete subtree; expanding restores the previous nested state — a child that was expanded before stays expanded.
+
+### Promote a branch into a new tree
+
+Long-press a non-root node on the canvas and drag it to the top drop banner (「拖到这里，设为新树根」). This creates a new tree view rooted at that node and keeps the original tree intact. The promoted root is stored per folder.
+
+Use the header switcher to choose 「当前对话树」 (default) or 「全部对话树」. The all-trees view lists every root conversation tree in the same folder plus promoted roots; choosing another root opens that conversation. The all-trees list uses the new Host `forest` action, so restart the Host once after updating.

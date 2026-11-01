@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- Parent nodes now expose collapse/expand-children in the detail header. Collapsing a parent hides its whole subtree; expanding it restores the nested collapse state of its children, so a previously expanded child stays expanded.
+- Long-press a non-root node and drag it to the top drop banner to promote it to a new tree root. Promoted roots are stored per folder and listed in the tree switcher.
+- The tree header now switches between the current conversation tree (default) and all root conversation trees in the same folder (new host `forest` action).
+- The promote gesture and all-trees list need the updated Host route; restart the Host after updating.
+
 ## 0.5.3 — 2026-11-01
 
 - Ancestor nodes with a generating descendant now use the same solid light-blue dot as the generating leaf instead of a hollow ring.

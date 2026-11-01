@@ -43,6 +43,16 @@ window.__ModuleLoader__.load({
       'panel.turns': '{n} 轮',
       'panel.branches': '{n} 条分支',
       'panel.partial': '有分支暂时读不到',
+      'panel.currentTree': '当前对话树',
+      'panel.allTrees': '全部对话树',
+      'panel.allTreesHint': '当前文件夹中的全部对话树',
+      'panel.allTreesEmpty': '这个文件夹里还没有对话树。',
+      'panel.treeUnavailable': '这棵树不在当前对话范围内。',
+      'panel.currentBadge': '当前',
+      'panel.promotedBadge': '新树',
+      'node.promote': '设为根节点',
+      'node.promoteDrop': '拖到这里，设为新树根',
+      'notice.promoted': '已创建新的对话树',
       'node.youAreHere': '你在这里',
       'node.blank': '新分支',
       'node.waiting': '等待提问',
@@ -81,7 +91,7 @@ window.__ModuleLoader__.load({
       'node.detailTruncated': '内容较长，已截断。',
       'node.jump': '回到这一轮',
       'node.afterLabel': '后续轮数',
-      'node.canvasHint': '拖动空白处平移 · 滚轮缩放 · 点击节点查看详情',
+      'node.canvasHint': '拖动空白处平移 · 滚轮缩放 · 点击节点查看详情 · 长按节点拖到顶部设为新树根',
       'node.center': '回到当前',
       'node.fit': '居中',
       'node.selectHint': '点击树上的节点查看详情',
@@ -130,6 +140,16 @@ window.__ModuleLoader__.load({
       'panel.turns': '{n} turns',
       'panel.branches': '{n} branches',
       'panel.partial': 'Some branches could not be read',
+      'panel.currentTree': 'Current tree',
+      'panel.allTrees': 'All trees',
+      'panel.allTreesHint': 'All conversation trees in this folder',
+      'panel.allTreesEmpty': 'No conversation trees in this folder yet.',
+      'panel.treeUnavailable': 'This tree is outside the current conversation family.',
+      'panel.currentBadge': 'Current',
+      'panel.promotedBadge': 'New tree',
+      'node.promote': 'Make tree root',
+      'node.promoteDrop': 'Drop here to make a new tree root',
+      'notice.promoted': 'New conversation tree created',
       'node.youAreHere': 'You are here',
       'node.blank': 'New branch',
       'node.waiting': 'Waiting for a question',
@@ -168,7 +188,7 @@ window.__ModuleLoader__.load({
       'node.detailTruncated': 'Long content truncated.',
       'node.jump': 'Go to this turn',
       'node.afterLabel': 'Turns after',
-      'node.canvasHint': 'Drag blank space to pan · scroll to zoom · click a node for details',
+      'node.canvasHint': 'Drag blank space to pan · scroll to zoom · click a node for details · long-press drag a node to the top to make a new tree root',
       'node.center': 'Center current',
       'node.fit': 'Center',
       'node.selectHint': 'Click a node in the tree to see its details',
@@ -295,6 +315,47 @@ window.__ModuleLoader__.load({
         if (inflight.get(sessionId) === promise) inflight.delete(sessionId)
       }).catch(() => {})
       return promise
+    }
+
+    async function fetchForest(sessionId) {
+      const response = await fetch(ROUTE, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ action: 'forest', sessionId }),
+      })
+      const body = await response.json().catch(() => null)
+      if (!response.ok || body === null || body.ok !== true) {
+        throw new Error(body !== null && typeof body.error === 'string' ? body.error : `HTTP ${response.status}`)
+      }
+      return body
+    }
+
+    const PROMOTED_KEY = 'treecom:promoted:v1'
+    const promotedKey = (cwd) => `${PROMOTED_KEY}:${cwd ?? 'global'}`
+    function readPromoted(cwd) {
+      try {
+        const raw = localStorage.getItem(promotedKey(cwd))
+        const value = raw === null ? [] : JSON.parse(raw)
+        return Array.isArray(value) ? value.filter((entry) => typeof entry?.nodeId === 'string') : []
+      } catch {
+        return []
+      }
+    }
+    function writePromoted(cwd, entries) {
+      try { localStorage.setItem(promotedKey(cwd), JSON.stringify(entries)) } catch { /* storage unavailable */ }
+    }
+
+    function activateTreeViewTab(attempt = 0) {
+      if (typeof document === 'undefined') return
+      const tabs = document.querySelectorAll('[data-conversation-tabs] [role="tab"]')
+      const label = translate('view.title')
+      for (const tab of tabs) {
+        if ((tab.textContent ?? '').trim() === label) {
+          tab.click()
+          return
+        }
+      }
+      if (attempt < 5) setTimeout(() => activateTreeViewTab(attempt + 1), 100)
     }
 
     function refreshAll() {
@@ -437,11 +498,11 @@ window.__ModuleLoader__.load({
       return { generating, childGenerating }
     }
 
-    function buildDisplayIndex(index, hiddenIds, expandedChains, prefixCuts) {
+    function buildDisplayIndex(index, hiddenIds, expandedChains, prefixCuts, collapsedParents, viewRootId) {
       const display = new Map()
       const chainByRep = new Map()
       const chainByMember = new Map()
-      const visibleChildren = (node) => (index.children.get(node.id) ?? []).filter((child) => hiddenIds.has(child.id) !== true)
+      const visibleChildren = (node) => (collapsedParents?.has(node.id) === true ? [] : (index.children.get(node.id) ?? []).filter((child) => hiddenIds.has(child.id) !== true))
       const addNode = (node, parentId) => {
         display.set(node.id, { ...node, parentId })
       }
@@ -516,9 +577,15 @@ window.__ModuleLoader__.load({
         addNode(node, parentId)
         for (const child of children) addSubtree(child, node.id)
       }
-      for (const root of index.roots) {
-        if (hiddenIds.has(root.id)) continue
-        addSubtree(root, root.parentId ?? null)
+      const viewRoot = viewRootId === null || viewRootId === undefined ? null : index.byId.get(viewRootId)
+      if (viewRoot !== undefined && viewRoot !== null && !hiddenIds.has(viewRoot.id)) {
+        addNode(viewRoot, null)
+        for (const child of visibleChildren(viewRoot)) addSubtree(child, viewRoot.id)
+      } else {
+        for (const root of index.roots) {
+          if (hiddenIds.has(root.id)) continue
+          addSubtree(root, root.parentId ?? null)
+        }
       }
       const byId = new Map(display)
       const children = new Map()
@@ -1276,7 +1343,7 @@ window.__ModuleLoader__.load({
     }
 
     function TreeCanvas(props) {
-      const { index, hiddenIds, selectedId, activeId, selectedPath, afterFor, chainByRep, chainByMember, onExpand, onCollapse, onSelect, sessionId, rootId, locked, focusNodeId, generatingIds, childGeneratingIds } = props
+      const { index, hiddenIds, selectedId, activeId, selectedPath, afterFor, chainByRep, chainByMember, onExpand, onCollapse, onSelect, sessionId, rootId, locked, focusNodeId, generatingIds, childGeneratingIds, onPromote } = props
       const layout = useMemo(() => layoutTree(index, hiddenIds), [index, hiddenIds])
       const wrapRef = useRef(null)
       const [pan, setPan] = useState({ x: 0, y: 0 })
@@ -1297,6 +1364,14 @@ window.__ModuleLoader__.load({
       const panRef = useRef(pan)
       const zoomRef = useRef(1)
       const [growingIds, setGrowingIds] = useState(() => new Set())
+      const [promote, setPromote] = useState(null)
+      const promoteTimer = useRef(null)
+      const promoteCleanup = useRef(null)
+
+      useEffect(() => () => {
+        if (promoteTimer.current !== null) clearTimeout(promoteTimer.current)
+        if (typeof promoteCleanup.current === 'function') promoteCleanup.current()
+      }, [])
 
       useLayoutEffect(() => {
         panRef.current = pan
@@ -1602,6 +1677,56 @@ window.__ModuleLoader__.load({
         setDragging(false)
       }
 
+      const startNodePress = (event, node) => {
+        if (event.button !== 0 || node.kind === 'root' || locked === true) return
+        const startX = event.clientX
+        const startY = event.clientY
+        const gesture = { node, active: false, over: false, pointerId: event.pointerId }
+        const cleanup = () => {
+          if (promoteTimer.current !== null) {
+            clearTimeout(promoteTimer.current)
+            promoteTimer.current = null
+          }
+          window.removeEventListener('pointermove', onMove)
+          window.removeEventListener('pointerup', onUp)
+          window.removeEventListener('pointercancel', onUp)
+          promoteCleanup.current = null
+          setPromote(null)
+        }
+        const onMove = (nextEvent) => {
+          if (nextEvent.pointerId !== gesture.pointerId) return
+          if (!gesture.active) {
+            if (Math.hypot(nextEvent.clientX - startX, nextEvent.clientY - startY) > 7) cleanup()
+            return
+          }
+          const wrap = wrapRef.current
+          if (wrap === null) return
+          const rect = wrap.getBoundingClientRect()
+          gesture.over = nextEvent.clientY < rect.top + 112
+            && nextEvent.clientX > rect.left + 8
+            && nextEvent.clientX < rect.right - 8
+          setPromote({ node, x: nextEvent.clientX, y: nextEvent.clientY, over: gesture.over })
+        }
+        const onUp = () => {
+          if (gesture.active) {
+            if (gesture.over === true && typeof onPromote === 'function') onPromote(node)
+            suppressClick.current = true
+            setTimeout(() => { suppressClick.current = false }, 0)
+          }
+          cleanup()
+        }
+        promoteCleanup.current = cleanup
+        window.addEventListener('pointermove', onMove)
+        window.addEventListener('pointerup', onUp)
+        window.addEventListener('pointercancel', onUp)
+        promoteTimer.current = setTimeout(() => {
+          gesture.active = true
+          suppressClick.current = true
+          setTip(null)
+          setPromote({ node, x: startX, y: startY, over: false })
+        }, 480)
+      }
+
       const showTip = (node, element) => {
         const wrap = wrapRef.current
         if (wrap === null) return
@@ -1634,6 +1759,7 @@ window.__ModuleLoader__.load({
           selectedPath.has(id) ? 'tc-canvas-node--path' : '',
           generatingIds?.has(id) === true ? 'tc-canvas-node--running' : '',
           childGeneratingIds?.has(id) === true ? 'tc-canvas-node--child-running' : '',
+          promote?.node.id === id ? 'tc-canvas-node--promoting' : '',
         ].filter((value) => value !== '').join(' ')
         const question = node.prompt || node.label || translate('node.blank')
         const growing = growingIds.has(id)
@@ -1661,7 +1787,10 @@ window.__ModuleLoader__.load({
             if (chain !== null) onExpand(chain)
             else onSelect(node)
           },
-          onPointerDown: (event) => event.stopPropagation(),
+          onPointerDown: (event) => {
+            event.stopPropagation()
+            startNodePress(event, node)
+          },
           onMouseEnter: (event) => showTip(node, event.currentTarget),
           onMouseLeave: scheduleHideTip,
         },
@@ -1826,13 +1955,17 @@ window.__ModuleLoader__.load({
             },
           }, translate('node.fit'))),
         h('div', { className: 'tc-canvas-hint' }, translate('node.canvasHint')),
+        promote !== null
+          ? h('div', { className: `tc-promote-zone${promote.over === true ? ' tc-promote-zone--over' : ''}` }, translate('node.promoteDrop'))
+          : null,
         tipElement)
     }
 
     function NodeDetailPane(props) {
       const {
         node, after, afterOnPath, isHere, isLeaf, running, childRunning, liveRunning, archived,
-        canFork, busy, onJump, onFork, onRename, onArchive, onAsk,
+        canFork, busy, hasChildren, childCollapsed, onJump, onFork, onRename, onArchive, onAsk,
+        onToggleChildren, onPromote,
       } = props
       const [detail, setDetail] = useState(null)
       const [loading, setLoading] = useState(false)
@@ -2053,6 +2186,24 @@ window.__ModuleLoader__.load({
           onClick: () => onFork(node),
         }, h(Icon, { name: 'plus', size: 13 }), translate('action.branch')))
       }
+      if (node.kind !== 'root' && typeof onPromote === 'function') {
+        actions.push(h('button', {
+          key: 'promote',
+          type: 'button',
+          className: 'tc-side-act',
+          disabled: busy,
+          onClick: () => onPromote(node),
+        }, h(Icon, { name: 'tree', size: 13 }), translate('node.promote')))
+      }
+      if (hasChildren === true) {
+        actions.push(h('button', {
+          key: 'children',
+          type: 'button',
+          className: 'tc-side-act',
+          disabled: busy,
+          onClick: () => onToggleChildren(node),
+        }, h(Icon, { name: childCollapsed ? 'down' : 'right', size: 13 }), translate(childCollapsed ? 'node.expand' : 'node.collapse')))
+      }
       actions.push(h('button', {
         key: 'rename',
         type: 'button',
@@ -2165,6 +2316,13 @@ window.__ModuleLoader__.load({
       const [collapsed, setCollapsed] = useState(() => new Set())
       const [expandedChains, setExpandedChains] = useState(() => new Set())
       const [prefixCuts, setPrefixCuts] = useState({})
+      const [collapsedParents, setCollapsedParents] = useState(() => new Set())
+      const [treeMode, setTreeMode] = useState('current')
+      const [viewRootId, setViewRootId] = useState(null)
+      const [forest, setForest] = useState(null)
+      const [forestLoading, setForestLoading] = useState(false)
+      const [forestError, setForestError] = useState(null)
+      const [promoted, setPromoted] = useState([])
       const toastTimer = useRef(null)
       const canFork = useAccess ? useAccess('session/fork') : true
       const liveArchived = useWorkspaces ? useWorkspaces(selectArchived) : null
@@ -2209,8 +2367,37 @@ window.__ModuleLoader__.load({
       useEffect(() => {
         setExpandedChains(new Set())
         setPrefixCuts({})
+        setCollapsedParents(new Set())
         setFocusNodeId(null)
       }, [data?.rootId])
+
+      useEffect(() => {
+        setPromoted(readPromoted(data?.cwd ?? null))
+      }, [data?.cwd])
+
+      useEffect(() => {
+        setTreeMode('current')
+        setViewRootId(null)
+      }, [sessionId])
+
+      useEffect(() => {
+        if (treeMode !== 'all' || data === null) return undefined
+        let cancelled = false
+        setForestLoading(true)
+        setForestError(null)
+        fetchForest(sessionId).then((next) => {
+          if (!cancelled) {
+            setForest(next)
+            setForestLoading(false)
+          }
+        }).catch((error) => {
+          if (!cancelled) {
+            setForestError(noticeText(error))
+            setForestLoading(false)
+          }
+        })
+        return () => { cancelled = true }
+      }, [treeMode, sessionId, data?.rootId])
 
       useEffect(() => {
         setOverrides({})
@@ -2361,23 +2548,9 @@ window.__ModuleLoader__.load({
           }
           /* A session remembers its last Conversation view; the fork child
              normally starts on Chat. Re-select the tree tab after the switch. */
-          const openTreeTab = (attempt = 0) => {
-            if (typeof document === 'undefined') return
-            const tabs = document.querySelectorAll('[data-conversation-tabs] [role="tab"]')
-            const label = translate('view.title')
-            for (const tab of tabs) {
-              if ((tab.textContent ?? '').trim() === label) {
-                tab.click()
-                return
-              }
-            }
-            if (attempt < 5) setTimeout(() => openTreeTab(attempt + 1), 100)
-          }
-          openTreeTab()
-          /* The header may still be showing the previous session for a frame.
-             Click again after the switched session has rendered. */
-          setTimeout(openTreeTab, 120)
-          setTimeout(openTreeTab, 320)
+          activateTreeViewTab()
+          setTimeout(activateTreeViewTab, 120)
+          setTimeout(activateTreeViewTab, 320)
           showToast(translate('notice.askSent'))
         } catch (error) {
           setNotice(fmt(translate('notice.askFailed'), { message: noticeText(error) }))
@@ -2488,8 +2661,8 @@ window.__ModuleLoader__.load({
       }, [data, index, archivedIds])
 
       const displayIndex = useMemo(() => (
-        index === null ? null : buildDisplayIndex(index, hiddenIds, expandedChains, prefixCuts)
-      ), [index, hiddenIds, expandedChains, prefixCuts])
+        index === null ? null : buildDisplayIndex(index, hiddenIds, expandedChains, prefixCuts, collapsedParents, viewRootId)
+      ), [index, hiddenIds, expandedChains, prefixCuts, collapsedParents, viewRootId])
 
       const activeLeafId = index?.leaf?.id ?? null
       const effectiveSelectedId = selectedNodeId !== null && !hiddenIds.has(selectedNodeId)
@@ -2575,6 +2748,62 @@ window.__ModuleLoader__.load({
         if (chain === null || chain === undefined) return
         if (!Number.isInteger(chain.index) || chain.index <= 0) return
         setPrefixCuts((current) => ({ ...current, [chain.key]: chain.index }))
+      }
+
+      const toggleChildren = (node) => {
+        if (node === null || node === undefined) return
+        setCollapsedParents((current) => {
+          const next = new Set(current)
+          if (next.has(node.id)) next.delete(node.id)
+          else next.add(node.id)
+          return next
+        })
+        setSelectedId(node.id)
+      }
+
+      const promoteNode = (node) => {
+        if (node === null || node === undefined || node.kind === 'root') return
+        const entry = { nodeId: node.id, sessionId: node.sessionId, label: labelOf(node) }
+        setPromoted((current) => {
+          if (current.some((item) => item.nodeId === entry.nodeId)) return current
+          const next = [...current, entry]
+          writePromoted(data?.cwd ?? null, next)
+          return next
+        })
+        setViewRootId(node.id)
+        setTreeMode('current')
+        setSelectedId(node.id)
+        setFocusNodeId(node.id)
+        showToast(translate('notice.promoted'))
+      }
+
+      const openTreeRoot = (rootId) => {
+        if (rootId === data?.rootId) {
+          setViewRootId(null)
+          setTreeMode('current')
+          return
+        }
+        const workspace = appCtx?.get('uiWorkspace')
+        if (!workspace) {
+          setNotice(translate('notice.noService'))
+          return
+        }
+        workspace.openSession(rootId)
+        setViewRootId(null)
+        setTreeMode('current')
+        setTimeout(activateTreeViewTab, 120)
+        setTimeout(activateTreeViewTab, 320)
+      }
+
+      const openPromoted = (entry) => {
+        if (index === null || !index.byId.has(entry.nodeId)) {
+          setNotice(translate('panel.treeUnavailable'))
+          return
+        }
+        setViewRootId(entry.nodeId)
+        setTreeMode('current')
+        setSelectedId(entry.nodeId)
+        setFocusNodeId(entry.nodeId)
       }
 
       const afterInfo = useMemo(() => {
@@ -2748,11 +2977,49 @@ window.__ModuleLoader__.load({
       const paneChildRunning = selectedNode !== null && runningInfo.childGenerating.has(selectedNode.id)
       const paneLiveRunning = selectedNode !== null && liveSessions?.[selectedNode.sessionId]?.running === true
       const paneArchived = selectedNode !== null && archivedIds.has(selectedNode.sessionId)
+      const modeSwitch = h('div', { className: 'tc-mode' },
+        h('button', {
+          type: 'button',
+          className: `tc-mode-btn${treeMode === 'current' ? ' tc-mode-btn--active' : ''}`,
+          onClick: () => { setTreeMode('current'); setViewRootId(null) },
+        }, translate('panel.currentTree')),
+        h('button', {
+          type: 'button',
+          className: `tc-mode-btn${treeMode === 'all' ? ' tc-mode-btn--active' : ''}`,
+          onClick: () => setTreeMode('all'),
+        }, translate('panel.allTrees')))
+      const rootItems = forest?.roots ?? []
+      const promotedItems = promoted.filter((entry) => index !== null && index.byId.has(entry.nodeId))
+      const allTreesNode = h('div', { className: 'tc-all-trees' },
+        h('div', { className: 'tc-all-hint' }, translate('panel.allTreesHint')),
+        forestLoading === true ? h('div', { className: 'tc-all-loading' }, translate('panel.loading')) : null,
+        forestError !== null ? h('div', { className: 'tc-side-error' }, `${translate('panel.error')}：${forestError}`) : null,
+        h('div', { className: 'tc-all-list' },
+          rootItems.map((root) => h('button', {
+            key: `root:${root.id}`,
+            type: 'button',
+            className: `tc-all-tree${root.id === data.rootId ? ' tc-all-tree--current' : ''}`,
+            onClick: () => openTreeRoot(root.id),
+          },
+            h('span', { className: 'tc-all-tree-name' }, root.title),
+            h('span', { className: 'tc-all-tree-meta' }, root.id === data.rootId ? translate('panel.currentBadge') : ''))),
+          promotedItems.map((entry) => h('button', {
+            key: `promoted:${entry.nodeId}`,
+            type: 'button',
+            className: `tc-all-tree tc-all-tree--promoted${entry.nodeId === viewRootId ? ' tc-all-tree--current' : ''}`,
+            onClick: () => openPromoted(entry),
+          },
+            h('span', { className: 'tc-all-tree-name' }, entry.label),
+            h('span', { className: 'tc-all-tree-meta' }, translate('panel.promotedBadge'))))),
+        rootItems.length === 0 && promotedItems.length === 0 && forestLoading !== true
+          ? h('div', { className: 'tc-empty' }, translate('panel.allTreesEmpty'))
+          : null)
       return h('div', { className: `tc-panel tc-panel--${variant}`, 'aria-busy': treeLocked },
         h('div', { className: 'tc-head' },
           h('div', { className: 'tc-head-text' },
             h('div', { className: 'tc-title' }, translate('panel.title')),
             h('div', { className: 'tc-sub' }, `${fmt(translate('panel.turns'), { n: turns })} · ${fmt(translate('panel.branches'), { n: branches })}`)),
+          modeSwitch,
           h('span', { className: 'tc-spacer' }),
           h(IconButton, {
             label: translate('panel.refresh'),
@@ -2767,7 +3034,9 @@ window.__ModuleLoader__.load({
         data.errors !== undefined && data.errors.length > 0 ? h('div', { className: 'tc-warn' }, translate('panel.partial')) : null,
         toastNode,
         h('div', { className: 'tc-body', 'aria-label': translate('panel.title') },
-          visibleNodes.length === 0
+          treeMode === 'all'
+            ? allTreesNode
+            : visibleNodes.length === 0
             ? h('div', { className: 'tc-empty' }, allArchived ? translate('panel.allArchived') : translate('panel.empty'))
             : h('div', { className: 'tc-workspace' },
                 h(TreeCanvas, {
@@ -2783,8 +3052,9 @@ window.__ModuleLoader__.load({
                   onCollapse: collapseAbove,
                   onSelect: (node) => setSelectedId(node.id),
                   sessionId,
-                  rootId: data.rootId,
+                  rootId: viewRootId ?? data.rootId,
                   locked: treeLocked,
+                  onPromote: promoteNode,
                   focusNodeId,
                   generatingIds: runningInfo.generating,
                   childGeneratingIds: runningInfo.childGenerating,
@@ -2795,6 +3065,10 @@ window.__ModuleLoader__.load({
                   afterOnPath: paneAfter.onPath,
                   isHere: paneIsHere,
                   isLeaf: paneIsLeaf,
+                  hasChildren: selectedNode !== null && (index.children.get(selectedNode.id)?.length ?? 0) > 0,
+                  childCollapsed: selectedNode !== null && collapsedParents.has(selectedNode.id),
+                  onToggleChildren: toggleChildren,
+                  onPromote: promoteNode,
                   running: paneRunning,
                   childRunning: paneChildRunning,
                   liveRunning: paneLiveRunning,
@@ -2992,6 +3266,24 @@ body.tc-view-tree-open [data-width-handle]::after{display:none!important}
 .tc-sidebar-body .tc-side{flex:0 0 46%;width:100%;max-width:none;max-height:52%;border-left:0;border-top:1px solid var(--dsw-alias-border-l1)}
 .tc-sidebar-body .tc-chat-bubble,.tc-sidebar-body .tc-chat-bubble--user{max-height:92px}
 .tc-sidebar-body .tc-chat-bubble--assistant{max-height:168px}
+.tc-mode{display:flex;align-items:center;gap:2px;flex:0 0 auto;padding:2px;border:1px solid var(--dsw-alias-border-l1);border-radius:7px;background:var(--dsw-alias-bg-layer-1)}
+.tc-mode-btn{border:0;background:transparent;color:var(--dsw-alias-label-tertiary);font:inherit;font-size:10.5px;line-height:1.4;padding:3px 7px;border-radius:5px;cursor:pointer;white-space:nowrap}
+.tc-mode-btn:hover{color:var(--dsw-alias-label-primary)}
+.tc-mode-btn--active{background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-primary)}
+.tc-all-trees{flex:1;min-height:0;overflow:auto;padding:14px 16px 20px;display:flex;flex-direction:column;gap:10px}
+.tc-all-hint{color:var(--dsw-alias-label-tertiary);font-size:11px;line-height:1.45}
+.tc-all-loading{color:var(--dsw-alias-label-tertiary);font-size:11px}
+.tc-all-list{display:flex;flex-direction:column;gap:6px}
+.tc-all-tree{display:flex;align-items:center;justify-content:space-between;gap:10px;text-align:left;width:100%;padding:9px 11px;border:1px solid var(--dsw-alias-border-l1);border-radius:8px;background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-primary);font:inherit;cursor:pointer}
+.tc-all-tree:hover{border-color:var(--dsw-alias-state-business-primary)}
+.tc-all-tree--current{border-color:var(--dsw-alias-state-business-primary);background:color-mix(in srgb,var(--dsw-alias-state-business-primary) 8%,var(--dsw-alias-bg-layer-1))}
+.tc-all-tree--promoted{border-style:dashed}
+.tc-all-tree-name{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px;font-weight:600}
+.tc-all-tree-meta{flex:0 0 auto;color:var(--dsw-alias-state-business-primary);font-size:10px;font-weight:600}
+.tc-promote-zone{position:absolute;left:50%;top:68px;transform:translateX(-50%);z-index:7;pointer-events:none;padding:8px 14px;border:1px dashed var(--dsw-alias-state-business-primary);border-radius:8px;background:color-mix(in srgb,var(--dsw-alias-bg-base) 88%,var(--dsw-alias-state-business-primary));color:var(--dsw-alias-state-business-primary);font-size:11px;font-weight:600;white-space:nowrap;box-shadow:0 6px 20px rgba(0,0,0,.18)}
+.tc-promote-zone--over{background:var(--dsw-alias-state-business-primary);color:var(--dsw-alias-bg-base)}
+.tc-canvas-node--promoting .tc-canvas-node-dot{box-shadow:0 0 0 3px var(--dsw-alias-state-business-primary)}
+
 .tc-toast{position:absolute;top:46px;left:50%;transform:translateX(-50%);z-index:5;padding:5px 10px;border-radius:999px;background:var(--dsw-alias-bg-layer-3);border:1px solid var(--dsw-alias-border-l2);color:var(--dsw-alias-label-primary);box-shadow:var(--dsw-elevation-panel);font-size:11px;white-space:nowrap;pointer-events:none;animation:tc-toast-in .15s ease-out}
 .tc-toast--busy{display:inline-flex;align-items:center;gap:6px;max-width:calc(100% - 20px);white-space:normal;text-align:center}
 .tc-spinner{flex:0 0 auto;width:10px;height:10px;border:2px solid var(--dsw-alias-border-l2);border-top-color:var(--dsw-alias-state-business-primary);border-radius:50%;display:inline-block;animation:tc-spin .8s linear infinite}
