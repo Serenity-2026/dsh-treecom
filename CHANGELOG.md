@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.5.2 — 2026-11-01
+
+- Generating status now uses a light-blue accent, while the “you are here” marker stays green. The running leaf, its ancestor “child generating” state, the hover preview, and the detail badges all use the light-blue generation color.
+
 ## 0.5.1 — 2026-11-01
 
 - Running status is now per-node: only the leaf turn that is actually generating is labeled “生成中”; its ancestors show “存在子节点正在生成中”. The canvas node state, hover preview, and right-side detail pane use the same distinction.
