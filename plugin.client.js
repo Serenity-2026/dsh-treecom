@@ -1527,11 +1527,20 @@ window.__ModuleLoader__.load({
           (rect.height - padding * 2) / layout.height,
         )
         const scale = Math.min(1, Math.max(0.3, fit))
-        zoomRef.current = scale
-        const nextPan = {
-          x: (rect.width - layout.width * scale) / 2,
-          y: (rect.height - layout.height * scale) / 2,
+        let top = null
+        for (const position of layout.positions.values()) {
+          if (top === null || position.y < top.y) top = position
         }
+        const nextPan = top === null
+          ? {
+              x: (rect.width - layout.width * scale) / 2,
+              y: (rect.height - layout.height * scale) / 2,
+            }
+          : {
+              x: rect.width / 2 - top.x * scale,
+              y: Math.max(24, rect.height * 0.16) - top.y * scale,
+            }
+        zoomRef.current = scale
         panRef.current = nextPan
         setZoom(scale)
         setPan(nextPan)
