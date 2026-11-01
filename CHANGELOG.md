@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 1.0.0 — 2026-11-01
 
 - Group conversation trees under their workspace, with an in-place chevron and a blue tree icon when expanded.
 - Add delete actions to tree folders and the all-trees list; confirm, then archive every session in that tree.
