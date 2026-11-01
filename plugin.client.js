@@ -2343,16 +2343,41 @@ window.__ModuleLoader__.load({
           if (result === undefined || result.ok !== true) {
             throw new Error(result?.error?.message ?? translate('node.asking'))
           }
-          /* The prompt has been accepted. Switch immediately instead of
-             waiting for a parent-tree refresh: the fork child is already
-             visible, and opening it makes the green “current” dot move to the
-             new turn without depending on unarchive/reload promises. */
+          /* The prompt has been accepted. Warm the child's tree cache while
+             the parent is still mounted, then switch. The child shares the
+             same root/family as the parent, so this makes the tree appear
+             immediately instead of showing a loading state after the switch. */
+          const warm = fetchTree(node.sessionId).then((next) => {
+            treeDataCache.set(node.sessionId, { data: next, revision: null })
+          }).catch(() => {})
+          await Promise.race([
+            warm,
+            new Promise((resolve) => setTimeout(resolve, 900)),
+          ])
           selectionIntent = null
           const workspace = appCtx?.get('uiWorkspace')
           if (workspace) {
             workspace.openSession(node.sessionId)
-            refreshAll()
           }
+          /* A session remembers its last Conversation view; the fork child
+             normally starts on Chat. Re-select the tree tab after the switch. */
+          const openTreeTab = (attempt = 0) => {
+            if (typeof document === 'undefined') return
+            const tabs = document.querySelectorAll('[data-conversation-tabs] [role="tab"]')
+            const label = translate('view.title')
+            for (const tab of tabs) {
+              if ((tab.textContent ?? '').trim() === label) {
+                tab.click()
+                return
+              }
+            }
+            if (attempt < 5) setTimeout(() => openTreeTab(attempt + 1), 100)
+          }
+          openTreeTab()
+          /* The header may still be showing the previous session for a frame.
+             Click again after the switched session has rendered. */
+          setTimeout(openTreeTab, 120)
+          setTimeout(openTreeTab, 320)
           showToast(translate('notice.askSent'))
         } catch (error) {
           setNotice(fmt(translate('notice.askFailed'), { message: noticeText(error) }))

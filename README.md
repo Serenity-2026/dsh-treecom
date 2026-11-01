@@ -111,4 +111,4 @@ MIT © 2026 Minchuan Deng
 
 ### Ask a blank branch from the tree
 
-Select a newly forked “新分支 / 等待提问” node, type directly into the 提问 box in the right detail pane, and press Enter. The question is sent to that branch’s own session, the current branch switches to the new turn (the green dot moves), and the answer streams into the same 回答 box.
+Select a newly forked “新分支 / 等待提问” node, type directly into the 提问 box in the right detail pane, and press Enter. The question is sent to that branch’s own session, the current branch switches to the new turn (the green dot moves), the 对话树 tab is reopened, and the answer streams into the same 回答 box. The child tree is prefetched before the switch so it appears instantly.
