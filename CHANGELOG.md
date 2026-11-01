@@ -1,8 +1,11 @@
 # Changelog
 
-## Unreleased
+## 0.5.0 — 2026-11-01
 
-- New branches now grow from their parent over about one second instead of appearing in a fraction of a second.
+- The canvas remembers its camera per conversation tree (zoom, center, and pan), so opening the right sidebar, switching to the Conversation tree tab, or returning to a branch resumes the previous view instead of snapping back to the root.
+- Branch growth is now detected per conversation root and only animates nodes that actually appeared; first mounts and session switches no longer trigger false growth animations.
+- Node positions animate when the tree relayouts, and the active branch's chain is expanded once when switching sessions so its leaf stays visible.
+- New branches now grow from their parent over about 0.6 seconds instead of appearing in a fraction of a second.
 - After a fork, the tree selects and centers the new branch (the conversation itself still stays on the current branch).
 - A freshly forked empty branch now shows “回到这一轮” in its detail pane, so it can be opened and continued immediately.
 - Forking a node now shows a persistent “branch created, refreshing the tree…” toast with a spinner, locks tree interactions until the forced refresh finishes, and then reports success.
