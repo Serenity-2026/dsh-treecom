@@ -4,4 +4,4 @@
 # Conversation "Tree" view.
 - insert:
     - id: treecom
-      name: treecom
+      name: dsh-treecom

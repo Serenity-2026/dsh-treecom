@@ -2,7 +2,7 @@
 
 > Tree-shaped conversation branching for DeepSeek Harness. Keep one visible conversation; manage its branches as a tree.
 >
-> 版本 **1.0.0** · MIT · DeepSeek Harness Web 插件
+> 版本 **1.0.1** · MIT · DeepSeek Harness Web 插件
 
 用一个对话窗口和一棵可平移的画布树管理它的分支；分支仍然是普通会话，会出现在左侧工作区：
 
@@ -47,16 +47,16 @@ DSH 官方支持的分支原语是 fork：把某一轮之前的完整事件前�
 
 `dsh plugin` 会把参数转发给 profile 目录里的 pnpm，因此 npm 包名、`github:`、`link:`、`file:` 等 pnpm 支持的 spec 都可以。
 
-从 GitHub 直接安装（当前可用）：
-
-```bash
-dsh plugin --profile web add github:Serenity-2026/dsh-treecom
-```
-
-发布到 npm 后，也可以只写包名：
+从 npm 安装：
 
 ```bash
 dsh plugin --profile web add dsh-treecom
+```
+
+也可以直接从 GitHub 安装（不经过 npm）：
+
+```bash
+dsh plugin --profile web add github:Serenity-2026/dsh-treecom
 ```
 
 本地开发时，克隆后把目录 link 进 profile：
@@ -68,7 +68,7 @@ dsh plugin --profile web add link:"$PWD/dsh-treecom"
 
 安装或更新后刷新 DSH Web 页面（Host 半的 `/treecom` 路由需要重新加载）。
 
-> 仓库名是 `dsh-treecom`，当前 npm 包名是 `treecom`；npm 上计划使用 `dsh-treecom`。在 npm 发布前，请使用上面的 `github:` spec。
+> 仓库名和 npm 包名都是 `dsh-treecom`；Host 内部的 bundle id 仍是 `treecom`，不影响安装。
 
 ## 使用
 

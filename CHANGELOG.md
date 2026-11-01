@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.0.1 — 2026-11-01
+
+- Publish to npm as `dsh-treecom`; the package was renamed from `treecom` to match the repository. No plugin code changes.
+
 ## 1.0.0 — 2026-11-01
 
 - Sidebar row archive buttons no longer lose their click when the tree grouping refreshes; tree-folder delete also works when the tree panel is not mounted.
