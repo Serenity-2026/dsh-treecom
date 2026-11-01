@@ -158,6 +158,17 @@ async function buildForest(ctx, sessionId) {
     })
   }
   roots.sort((left, right) => (right.createdAt ?? 0) - (left.createdAt ?? 0))
+  for (const root of roots) {
+    const record = byId.get(root.id)
+    if (record === undefined) continue
+    try {
+      const snapshot = await readSnapshot(ctx, record)
+      const turns = cachedTurns(root.id, snapshot.events)
+      root.title = titleOf(snapshot.events) || firstPrompt(turns) || shortId(root.id)
+    } catch {
+      /* keep the catalogue title / short id */
+    }
+  }
   return { ok: true, sessionId, cwd, roots }
 }
 
