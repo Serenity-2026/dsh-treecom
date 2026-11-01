@@ -3536,15 +3536,15 @@ body.tc-view-tree-open [data-width-handle]::after{display:none!important}
 @media (max-width:980px){.tc-side,.tc-panel--view .tc-side{flex-basis:320px;width:320px}}
 @media (max-width:760px){.tc-workspace{flex-direction:column}.tc-canvas-wrap{flex:1 1 auto;min-height:220px}.tc-side,.tc-panel--view .tc-side{flex:0 0 45%;width:100%;border-left:0;border-top:1px solid var(--dsw-alias-border-l1)}}
 
-.tc-left-tree-head{display:flex;align-items:center;gap:6px;min-width:0;margin:2px 4px 1px;padding:4px 6px;border-radius:6px;color:var(--dsw-alias-label-secondary);font:inherit;font-size:11.5px;font-weight:600;line-height:18px;cursor:pointer;user-select:none;outline:none}
+.tc-left-tree-head{display:flex;align-items:center;gap:6px;min-width:0;margin:1px 4px 2px;padding:5px 6px;border-radius:6px;color:var(--dsw-alias-label-secondary);font:inherit;font-size:14px;font-weight:600;line-height:20px;cursor:pointer;user-select:none;outline:none}
 .tc-left-tree-head:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}
 .tc-left-tree-head:focus-visible{box-shadow:0 0 0 2px var(--dsw-alias-state-business-primary)}
 .tc-left-tree-head--current{color:var(--dsw-alias-label-primary)}
-.tc-left-tree-chevron{flex:none;width:12px;color:var(--dsw-alias-label-tertiary);font-size:11px;transform:rotate(90deg);transition:transform .15s ease}
+.tc-left-tree-chevron{flex:none;width:13px;color:var(--dsw-alias-label-tertiary);font-size:12px;transform:rotate(90deg);transition:transform .15s ease}
 .tc-left-tree-head--collapsed .tc-left-tree-chevron{transform:rotate(0)}
 .tc-left-tree-folder{flex:none;display:inline-flex;align-items:center;justify-content:center;color:var(--dsw-alias-label-secondary)}
 .tc-left-tree-name{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.tc-left-tree-count{flex:none;margin-left:auto;color:var(--dsw-alias-label-tertiary);font-size:10px;font-weight:500;font-variant-numeric:tabular-nums}
+.tc-left-tree-count{flex:none;margin-left:auto;color:var(--dsw-alias-label-tertiary);font-size:10.5px;font-weight:500;font-variant-numeric:tabular-nums}
 .tc-left-tree-dot{flex:none;width:6px;height:6px;border-radius:50%;background:var(--dsw-alias-state-success-primary);box-shadow:0 0 0 2px color-mix(in srgb,var(--dsw-alias-state-success-primary) 18%,transparent)}
 [data-treecom-left-row="true"]{margin-left:16px;width:calc(100% - 16px);box-sizing:border-box}
 [data-treecom-left-row="true"].tc-left-tree-row--collapsed{display:none!important}
@@ -3644,8 +3644,13 @@ body.tc-view-tree-open [data-width-handle]::after{display:none!important}
           const currentRoot = selectedRoot(byId)
           const workspaceRows = [...document.querySelectorAll('[data-row-key^="workspace:"]')]
           for (const workspaceRow of workspaceRows) {
-            const section = workspaceRow.parentElement
-            if (section !== null) section.setAttribute('data-treecom-workspace-section', '')
+            let section = workspaceRow.parentElement
+            while (section !== null && section.querySelector('[data-row-key^="session:"]') === null) {
+              section = section.parentElement
+            }
+            if (section !== null && section !== document.body && section !== document.documentElement) {
+              section.setAttribute('data-treecom-workspace-section', '')
+            }
           }
           const bySection = new Map()
           for (const row of rows) {
