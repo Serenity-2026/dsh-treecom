@@ -3785,6 +3785,24 @@ body.tc-view-tree-open [data-width-handle]::after{display:none!important}
       cancel.focus()
     }
 
+    function fallbackTreeDelete(root, title, ids) {
+      const unique = [...new Set((ids ?? []).filter((id) => typeof id === 'string' && id !== ''))]
+      if (unique.length === 0) return
+      showTreeDeleteConfirm({
+        title,
+        count: unique.length,
+        onConfirm: async () => {
+          const workspace = appCtx?.get('uiWorkspace')
+          if (workspace === undefined || typeof workspace.archiveSession !== 'function') {
+            throw new Error(translate('notice.noService'))
+          }
+          for (const id of unique) await workspace.archiveSession(id)
+          if (typeof showToast !== 'function') return
+          showToast(fmt(translate('treeDelete.done'), { n: unique.length }))
+        },
+      })
+    }
+
     function installSidebarTreeGrouping(sessions) {
       if (typeof document === 'undefined' || typeof window === 'undefined') return () => {}
       const list = sessions?.list
@@ -3973,9 +3991,8 @@ body.tc-view-tree-open [data-width-handle]::after{display:none!important}
                   .map((row) => row.getAttribute('data-row-key') ?? '')
                   .filter((key) => key.startsWith('session:'))
                   .map((key) => key.slice(8))
-                if (typeof sidebarTreeDeleteHandler === 'function') {
-                  sidebarTreeDeleteHandler(group.root, title, ids)
-                }
+                const handler = typeof sidebarTreeDeleteHandler === 'function' ? sidebarTreeDeleteHandler : fallbackTreeDelete
+                handler(group.root, title, ids)
               })
               head.append(folder, name, count, remove)
               const toggle = (event) => {
@@ -4056,7 +4073,10 @@ body.tc-view-tree-open [data-width-handle]::after{display:none!important}
             return
           }
           if (mutation.type === 'childList') {
-            schedule()
+            const rows = (node) => node instanceof Element
+              && (node.matches('[data-row-key^="session:"]') || node.querySelector('[data-row-key^="session:"]') !== null)
+            const changed = [...mutation.addedNodes, ...mutation.removedNodes].some(rows)
+            if (changed) schedule()
             return
           }
         }
