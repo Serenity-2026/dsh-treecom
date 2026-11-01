@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- New branches now grow from their parent over about one second instead of appearing in a fraction of a second.
+- After a fork, the tree selects and centers the new branch (the conversation itself still stays on the current branch).
+- A freshly forked empty branch now shows “回到这一轮” in its detail pane, so it can be opened and continued immediately.
 - Forking a node now shows a persistent “branch created, refreshing the tree…” toast with a spinner, locks tree interactions until the forced refresh finishes, and then reports success.
 - Forking from a tree node now keeps the current conversation tree open (no unarchive/open-session focus) instead of switching to the newly created child conversation.
 - Newly visible tree nodes and their edges animate out from their parent node instead of appearing abruptly.

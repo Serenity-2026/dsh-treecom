@@ -1208,7 +1208,7 @@ window.__ModuleLoader__.load({
     }
 
     function TreeCanvas(props) {
-      const { index, hiddenIds, selectedId, activeId, selectedPath, afterFor, chainByRep, chainByMember, onExpand, onCollapse, onSelect, sessionId, locked } = props
+      const { index, hiddenIds, selectedId, activeId, selectedPath, afterFor, chainByRep, chainByMember, onExpand, onCollapse, onSelect, sessionId, locked, focusNodeId } = props
       const layout = useMemo(() => layoutTree(index, hiddenIds), [index, hiddenIds])
       const wrapRef = useRef(null)
       const [pan, setPan] = useState({ x: 0, y: 0 })
@@ -1223,6 +1223,7 @@ window.__ModuleLoader__.load({
       const suppressClick = useRef(false)
       const tipPointerDown = useRef(false)
       const centeredSession = useRef(null)
+      const focusedNode = useRef(null)
       const panRef = useRef(pan)
       const zoomRef = useRef(1)
       const knownNodeLayout = useRef({ sessionId: null, ids: new Set() })
@@ -1250,7 +1251,7 @@ window.__ModuleLoader__.load({
           return undefined
         }
         setGrowingIds(fresh)
-        const timer = setTimeout(() => setGrowingIds(new Set()), 560)
+        const timer = setTimeout(() => setGrowingIds(new Set()), 1150)
         return () => clearTimeout(timer)
       }, [layout, sessionId])
 
@@ -1324,6 +1325,13 @@ window.__ModuleLoader__.load({
         centeredSession.current = sessionId
         centerOn(index.roots[0]?.id ?? selectedId ?? activeId ?? null, true)
       }, [sessionId, layout, selectedId, activeId])
+      useEffect(() => {
+        if (focusNodeId === null || focusNodeId === undefined) return
+        if (focusedNode.current === focusNodeId) return
+        if (!layout.positions.has(focusNodeId)) return
+        focusedNode.current = focusNodeId
+        centerOn(focusNodeId)
+      }, [focusNodeId, layout])
 
       useEffect(() => {
         const wrap = wrapRef.current
@@ -1816,7 +1824,7 @@ window.__ModuleLoader__.load({
       if (archived) badges.push(h('span', { key: 'archived', className: 'tc-side-badge' }, translate('node.archive')))
 
       const actions = []
-      if (node.kind === 'turn') {
+      if (node.kind === 'turn' || node.kind === 'blank') {
         actions.push(h('button', {
           key: 'jump',
           type: 'button',
@@ -1825,6 +1833,8 @@ window.__ModuleLoader__.load({
           disabled: busy,
           onClick: () => onJump(node),
         }, h(Icon, { name: 'right', size: 13 }), translate('node.jump')))
+      }
+      if (node.kind === 'turn') {
         actions.push(h('button', {
           key: 'fork',
           type: 'button',
@@ -1917,6 +1927,7 @@ window.__ModuleLoader__.load({
       const [refreshing, setRefreshing] = useState(false)
       const [toast, setToast] = useState(null)
       const [forkPhase, setForkPhase] = useState(null)
+      const [focusNodeId, setFocusNodeId] = useState(null)
       const [selectedId, setSelectedId] = useState(null)
       const [collapsed, setCollapsed] = useState(() => new Set())
       const [expandedChains, setExpandedChains] = useState(() => new Set())
@@ -1964,6 +1975,7 @@ window.__ModuleLoader__.load({
       useEffect(() => {
         setExpandedChains(new Set())
         setPrefixCuts({})
+        setFocusNodeId(null)
       }, [sessionId])
 
       useEffect(() => {
@@ -2026,7 +2038,7 @@ window.__ModuleLoader__.load({
         if (targetSession !== sessionId) {
           selectionIntent = { sessionId: targetSession, nodeId: node.id }
           setBusy(true)
-          switchTo(targetSession, false).then(() => {
+          switchTo(targetSession, node.kind === 'blank').then(() => {
             if (node.turn > 0) jumpToTurn(node.turn)
           }).catch((switchError) => {
             setNotice(fmt(translate('notice.switchFailed'), { message: noticeText(switchError) }))
@@ -2058,10 +2070,17 @@ window.__ModuleLoader__.load({
         setBusy(true)
         setForkPhase('creating')
         let created = false
-        forkAt(node).then(async () => {
+        forkAt(node).then(async (childId) => {
           created = true
           setForkPhase('refreshing')
-          await reload(true)
+          const nextData = await reload(true)
+          const nextIndex = indexOf(nextData)
+          const childNode = nextData.nodes.find((candidate) => candidate.sessionId === childId && candidate.kind === 'blank')
+            ?? nextData.nodes.find((candidate) => candidate.sessionId === childId)
+          if (childNode !== undefined && nextIndex.byId.has(childNode.id)) {
+            setSelectedId(childNode.id)
+            setFocusNodeId(childNode.id)
+          }
           setForkPhase(null)
           showToast(translate('notice.forkDone'))
         }).catch((forkError) => {
@@ -2433,6 +2452,7 @@ window.__ModuleLoader__.load({
                   onSelect: (node) => setSelectedId(node.id),
                   sessionId,
                   locked: treeLocked,
+                  focusNodeId,
                 }),
                 h(NodeDetailPane, {
                   node: paneNode,
@@ -2649,8 +2669,8 @@ body.tc-view-tree-open [data-width-handle]::after{display:none!important}
 .tc-canvas-edges{position:absolute;left:0;top:0;overflow:visible;pointer-events:none}
 .tc-canvas-edge{fill:none;stroke:var(--dsw-alias-border-l2);stroke-width:1.4;stroke-linecap:round}
 .tc-canvas-edge--path{stroke:var(--dsw-alias-state-business-primary);stroke-width:2;opacity:.8}
-.tc-canvas-edge--grow{stroke-dasharray:1;stroke-dashoffset:1;animation:tc-edge-grow .42s ease-out .04s both}
-.tc-canvas-node--grow{animation:tc-node-grow .44s cubic-bezier(.2,.9,.2,1) both}
+.tc-canvas-edge--grow{stroke-dasharray:1;stroke-dashoffset:1;animation:tc-edge-grow 1s ease-out .04s both}
+.tc-canvas-node--grow{animation:tc-node-grow 1s cubic-bezier(.2,.9,.2,1) both}
 @keyframes tc-node-grow{from{opacity:0;transform:translate(calc(-50% + var(--grow-x,0px)),calc(-50% + var(--grow-y,0px))) scale(.18)}to{opacity:1;transform:translate(-50%,-50%) scale(1)}}
 @keyframes tc-edge-grow{to{stroke-dashoffset:0}}
 @media (prefers-reduced-motion:reduce){.tc-canvas-node--grow,.tc-canvas-edge--grow{animation:none}}
