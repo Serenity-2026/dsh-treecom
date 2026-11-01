@@ -545,14 +545,13 @@ window.__ModuleLoader__.load({
         atSeq: node.endSeq,
         increaseTitle: true,
       })
-      pending.focusSession = childId
-      selectionIntent = { sessionId: childId, nodeId: null }
       try {
         await workspace.unarchiveSession(childId)
       } catch {
         /* a fresh child is normally visible already */
       }
-      workspace.openSession(childId)
+      /* Keep the current conversation tree open. The new branch appears in
+         the tree after refresh; forking must not navigate to the child. */
       refreshAll()
       return childId
     }

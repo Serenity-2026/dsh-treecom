@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Forking from a tree node now keeps the current conversation tree open instead of switching to the newly created child conversation.
+
 ## 0.3.0 — 2026-10-31
 
 - The question and answer bubbles in the right detail pane now use max-heights: they shrink to the content and scroll internally only when the content exceeds the limit.
