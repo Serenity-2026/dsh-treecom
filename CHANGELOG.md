@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.0.2 — 2026-11-01
+
+- Docs: add the runtime screenshot and simplify the README. No plugin code changes; the `assets/` folder is included in the npm package.
+
 ## 1.0.1 — 2026-11-01
 
 - Publish to npm as `dsh-treecom`; the package was renamed from `treecom` to match the repository. No plugin code changes.
