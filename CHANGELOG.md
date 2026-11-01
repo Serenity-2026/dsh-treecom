@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Blank forked branches can be asked directly from the tree detail pane; the question is sent to that branch's session, the tree selects the new turn, and the answer updates live without switching the current conversation.
+
+## Unreleased
+
 - Ancestor nodes with a generating descendant now use the same solid light-blue dot as the generating leaf instead of a hollow ring.
 
 ## 0.5.2 — 2026-11-01

@@ -108,3 +108,7 @@ dsh plugin --profile web add link:"$PWD/dsh-treecom"
 ## License
 
 MIT © 2026 Minchuan Deng
+
+### Ask a blank branch from the tree
+
+Select a newly forked “新分支 / 等待提问” node, type in the question box in the right detail pane, and press Enter. The question is sent to that branch’s own session without switching the current conversation. The tree selects the new turn and the answer streams into that pane.

@@ -46,6 +46,10 @@ window.__ModuleLoader__.load({
       'node.youAreHere': '你在这里',
       'node.blank': '新分支',
       'node.waiting': '等待提问',
+      'node.askPlaceholder': '输入问题，Enter 发送 · Shift+Enter 换行',
+      'node.askSend': '发送',
+      'node.asking': '发送中…',
+      'node.askHint': '发送后在这里实时显示回答',
       'node.running': '生成中',
       'node.childRunning': '存在子节点正在生成中',
       'node.open': '未完成',
@@ -106,6 +110,8 @@ window.__ModuleLoader__.load({
       'notice.running': '当前分支还在生成，等这一轮结束再切换。',
       'notice.busyFork': '这一轮还在生成，等它结束再分叉。',
       'notice.noService': '这个环境缺少会话服务，无法分叉。',
+      'notice.askFailed': '提问失败：{message}',
+      'notice.askSent': '已发送，正在等待回答',
       'notice.noAccess': '没有分叉这个会话的权限。',
       'notice.renameFailed': '改名失败：{message}',
       'notice.archiveFailed': '归档失败：{message}',
@@ -127,6 +133,10 @@ window.__ModuleLoader__.load({
       'node.youAreHere': 'You are here',
       'node.blank': 'New branch',
       'node.waiting': 'Waiting for a question',
+      'node.askPlaceholder': 'Ask a question — Enter sends, Shift+Enter adds a line',
+      'node.askSend': 'Send',
+      'node.asking': 'Sending…',
+      'node.askHint': 'The answer will stream here after sending',
       'node.running': 'Generating',
       'node.childRunning': 'A child node is generating',
       'node.open': 'Open',
@@ -187,6 +197,8 @@ window.__ModuleLoader__.load({
       'notice.running': 'This branch is still generating; wait for the turn to finish.',
       'notice.busyFork': 'This turn is still generating; wait for it to finish before branching.',
       'notice.noService': 'Session services are unavailable here, so branching is disabled.',
+      'notice.askFailed': 'Could not send the question: {message}',
+      'notice.askSent': 'Question sent; waiting for the answer',
       'notice.noAccess': 'This session cannot be forked.',
       'notice.renameFailed': 'Rename failed: {message}',
       'notice.archiveFailed': 'Archive failed: {message}',
@@ -1819,8 +1831,8 @@ window.__ModuleLoader__.load({
 
     function NodeDetailPane(props) {
       const {
-        node, after, afterOnPath, isHere, isLeaf, running, childRunning, archived,
-        canFork, busy, onJump, onFork, onRename, onArchive,
+        node, after, afterOnPath, isHere, isLeaf, running, childRunning, liveRunning, archived,
+        canFork, busy, onJump, onFork, onRename, onArchive, onAsk,
       } = props
       const [detail, setDetail] = useState(null)
       const [loading, setLoading] = useState(false)
@@ -1828,6 +1840,8 @@ window.__ModuleLoader__.load({
       const [renaming, setRenaming] = useState(false)
       const [value, setValue] = useState('')
       const [copied, setCopied] = useState(null)
+      const [askText, setAskText] = useState('')
+      const [sending, setSending] = useState(false)
       const inputRef = useRef(null)
       const bodyRef = useRef(null)
       const renamingRef = useRef(false)
@@ -1835,12 +1849,15 @@ window.__ModuleLoader__.load({
       const nodeId = node?.id ?? null
       const endSeq = node?.endSeq ?? null
       const cacheKey = nodeId === null ? null : `${nodeId}:${endSeq ?? ''}`
+      const live = node !== null && node.kind === 'turn' && (liveRunning === true || running === true || node.open === true)
 
       useEffect(() => {
         renamingRef.current = false
         setRenaming(false)
         setValue(node?.label ?? '')
         setCopied(null)
+        setAskText('')
+        setSending(false)
         setDetail(null)
         setLoadError(null)
         if (bodyRef.current !== null) bodyRef.current.scrollTop = 0
@@ -1890,6 +1907,24 @@ window.__ModuleLoader__.load({
         }
       }, [nodeId, endSeq, node?.kind, cacheKey])
 
+      useEffect(() => {
+        if (!live || node === null || cacheKey === null) return undefined
+        let cancelled = false
+        const poll = () => {
+          fetchDetail(node.id).then((next) => {
+            if (cancelled) return
+            detailCache.set(cacheKey, { at: Date.now(), detail: next })
+            setDetail(next)
+            setLoadError(null)
+          }).catch(() => {})
+        }
+        const timer = setInterval(poll, 800)
+        return () => {
+          cancelled = true
+          clearInterval(timer)
+        }
+      }, [live, nodeId, endSeq, node?.kind, cacheKey])
+
       const submitRename = () => {
         if (node === null || !renamingRef.current) return
         renamingRef.current = false
@@ -1909,6 +1944,22 @@ window.__ModuleLoader__.load({
         renamingRef.current = false
         setRenaming(false)
         setValue(node?.label ?? '')
+      }
+
+      const submitAsk = async () => {
+        if (node === null || node.kind !== 'blank' || busy || sending) return
+        if (typeof onAsk !== 'function') return
+        const text = askText.trim()
+        if (text === '') return
+        setAskText('')
+        setSending(true)
+        try {
+          await onAsk(node, text)
+        } catch {
+          setAskText(text)
+        } finally {
+          setSending(false)
+        }
       }
 
       if (node === null) {
@@ -2072,7 +2123,32 @@ window.__ModuleLoader__.load({
                 chatHead('answer', translate('node.answerLabel'), answer),
                 h('div', { className: `tc-chat-bubble tc-chat-bubble--assistant${loading ? ' tc-chat-bubble--loading' : ''}` }, h(MarkdownText, { text: answerText })),
                 detail?.truncated === true ? h('div', { className: 'tc-side-note' }, translate('node.detailTruncated')) : null,
-                detail?.time ? h('div', { className: 'tc-side-note' }, formatTime(detail.time)) : null)))
+                detail?.time ? h('div', { className: 'tc-side-note' }, formatTime(detail.time)) : null),
+          node.kind === 'blank'
+            ? h('div', { className: 'tc-branch-ask' },
+                h('textarea', {
+                  className: 'tc-branch-ask-input',
+                  rows: 2,
+                  value: askText,
+                  placeholder: translate('node.askPlaceholder'),
+                  disabled: busy || sending,
+                  onChange: (event) => setAskText(event.target.value),
+                  onKeyDown: (event) => {
+                    if (event.key === 'Enter' && event.shiftKey !== true && event.isComposing !== true) {
+                      event.preventDefault()
+                      submitAsk()
+                    }
+                  },
+                }),
+                h('div', { className: 'tc-branch-ask-foot' },
+                  h('span', { className: 'tc-branch-ask-hint' }, translate('node.askHint')),
+                  h('button', {
+                    type: 'button',
+                    className: 'tc-branch-ask-send',
+                    disabled: busy || sending || askText.trim() === '',
+                    onClick: submitAsk,
+                  }, sending ? translate('node.asking') : translate('node.askSend'))))
+            : null))
     }
 
     /* ---------------------------------------------------------- panel -- */
@@ -2249,6 +2325,45 @@ window.__ModuleLoader__.load({
           setForkPhase(null)
           setBusy(false)
         })
+      }
+
+      const askBranch = async (node, text) => {
+        if (busy || node.kind !== 'blank') return
+        const sessions = appCtx?.get('sessions')
+        if (!sessions || typeof sessions.using !== 'function') {
+          const error = new Error(translate('notice.noService'))
+          setNotice(fmt(translate('notice.askFailed'), { message: noticeText(error) }))
+          throw error
+        }
+        setBusy(true)
+        try {
+          const result = await sessions.using(node.sessionId, { source: 'workspaceOperation' }, (reference) => (
+            reference.binding.session.prompt([{ type: 'text', text }], 'queue')
+          ))
+          if (result === undefined || result.ok !== true) {
+            throw new Error(result?.error?.message ?? translate('node.asking'))
+          }
+          let nextData = await reload(true)
+          let childNode = null
+          for (let attempt = 0; attempt < 8; attempt += 1) {
+            childNode = nextData.nodes
+              .filter((candidate) => candidate.sessionId === node.sessionId && candidate.kind === 'turn')
+              .sort((left, right) => (right.turn ?? 0) - (left.turn ?? 0))[0] ?? null
+            if (childNode !== null) break
+            await new Promise((resolve) => setTimeout(resolve, 300))
+            nextData = await reload(true)
+          }
+          if (childNode !== null) {
+            setSelectedId(childNode.id)
+            setFocusNodeId(childNode.id)
+          }
+          showToast(translate('notice.askSent'))
+        } catch (error) {
+          setNotice(fmt(translate('notice.askFailed'), { message: noticeText(error) }))
+          throw error
+        } finally {
+          setBusy(false)
+        }
       }
 
       const renameSessionTitle = async (targetSessionId, title) => {
@@ -2609,6 +2724,7 @@ window.__ModuleLoader__.load({
       const paneIsLeaf = selectedNode !== null && index.leaves.get(selectedNode.sessionId)?.id === selectedNode.id
       const paneRunning = selectedNode !== null && runningInfo.generating.has(selectedNode.id)
       const paneChildRunning = selectedNode !== null && runningInfo.childGenerating.has(selectedNode.id)
+      const paneLiveRunning = selectedNode !== null && liveSessions?.[selectedNode.sessionId]?.running === true
       const paneArchived = selectedNode !== null && archivedIds.has(selectedNode.sessionId)
       return h('div', { className: `tc-panel tc-panel--${variant}`, 'aria-busy': treeLocked },
         h('div', { className: 'tc-head' },
@@ -2659,9 +2775,11 @@ window.__ModuleLoader__.load({
                   isLeaf: paneIsLeaf,
                   running: paneRunning,
                   childRunning: paneChildRunning,
+                  liveRunning: paneLiveRunning,
                   archived: paneArchived,
                   canFork,
                   busy,
+                  onAsk: askBranch,
                   onJump: activate,
                   onFork: forkFromNode,
                   onRename: rename,
@@ -2978,6 +3096,15 @@ body.tc-view-tree-open [data-width-handle]::after{display:none!important}
 .tc-chat-bubble--user{max-height:116px}
 .tc-chat-bubble::-webkit-scrollbar{width:6px}
 .tc-chat-bubble::-webkit-scrollbar-thumb{background:var(--dsw-alias-border-l2);border-radius:3px}
+.tc-branch-ask{display:flex;flex-direction:column;gap:6px;margin-top:2px;padding-top:11px;border-top:1px solid var(--dsw-alias-border-l1)}
+.tc-branch-ask-input{width:100%;box-sizing:border-box;min-height:58px;max-height:160px;resize:vertical;padding:8px 10px;border:1px solid var(--dsw-alias-border-l2);border-radius:8px;background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-primary);font:inherit;font-size:12px;line-height:1.5;outline:none}
+.tc-branch-ask-input:focus{border-color:var(--dsw-alias-state-business-primary);box-shadow:0 0 0 2px color-mix(in srgb,var(--dsw-alias-state-business-primary) 16%,transparent)}
+.tc-branch-ask-input:disabled{opacity:.6}
+.tc-branch-ask-foot{display:flex;align-items:center;justify-content:space-between;gap:8px}
+.tc-branch-ask-hint{color:var(--dsw-alias-label-tertiary);font-size:10.5px;line-height:1.4}
+.tc-branch-ask-send{flex:0 0 auto;padding:5px 12px;border:1px solid var(--dsw-alias-state-business-primary);border-radius:7px;background:var(--dsw-alias-state-business-primary);color:var(--dsw-alias-bg-base);font:inherit;font-size:11.5px;font-weight:600;cursor:pointer}
+.tc-branch-ask-send:hover:not(:disabled){filter:brightness(1.08)}
+.tc-branch-ask-send:disabled{cursor:default;opacity:.45}
 .tc-chat-bubble--user{border-color:color-mix(in srgb,var(--dsw-alias-state-business-primary) 34%,var(--dsw-alias-border-l1));background:color-mix(in srgb,var(--dsw-alias-state-business-primary) 6%,var(--dsw-alias-bg-layer-1))}
 .tc-chat-bubble--assistant{max-height:220px;background:var(--dsw-alias-bg-layer-1)}
 .tc-chat-bubble--loading{color:var(--dsw-alias-label-tertiary);font-style:italic}
