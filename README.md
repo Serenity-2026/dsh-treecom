@@ -1,132 +1,54 @@
 # TreeCom — 对话树
 
-> Tree-shaped conversation branching for DeepSeek Harness. Keep one visible conversation; manage its branches as a tree.
->
-> 版本 **1.0.1** · MIT · DeepSeek Harness Web 插件
+把一段对话的所有分叉管理成一棵可平移、可缩放的画布树。每个分支仍然是普通 DSH 会话，会正常出现在左侧工作区。
 
-用一个对话窗口和一棵可平移的画布树管理它的分支；分支仍然是普通会话，会出现在左侧工作区：
+![TreeCom 对话树界面](assets/runtime.webp)
 
-- 画布上每个圆点是一个节点；根节点在顶部，分支向下展开，按叶序从左到右排开；
-- 拖动空白画布即可上下左右平移；滚轮 / 触控板缩放，树可以无限延伸；画布左上角「回到当前」定位当前叶子，「居中」把树移回视野中心；
-- **点击节点 = 选中并在右侧打开该轮详情**，不会跳转、也不会分叉；详情里的「回到这一轮」才会切换分支并定位；
-- 生成状态按节点区分：只有真正在生成的那一轮叶子显示「生成中」，它的父节点显示「存在子节点正在生成中」；画布、悬停预览和右侧详情保持一致；「生成中」用浅蓝色标记，「你在这里」保持绿色；
-- 右侧详情显示：上下文窗口占用（百分比 + 进度条 + 精确 token）、从该节点开始还能继续多少轮、可上下滚动的完整提问 / 回答，以及归档、重命名、分叉；
-- 鼠标悬停节点会浮出可交互的详情预览：轮次、完整提问与回答、上下文占用、后续轮数；鼠标移进预览框不会消失，框本身是箭头；移到文字上变为工字光标，可直接拖拽选择并复制；可用滚轮在框内上下滚动查看完整对话；点击预览框底部的「点击查看详情」与点击节点效果相同；
-- **没有分叉的连续轮次会折叠成一个带数字的节点**；点击该节点展开整段连续对话；展开后把鼠标移到链上的节点，预览框里会出现「折叠上方 N 轮」，只折叠该节点之上的部分，不会把整条链全部收起；
-- 树数据按会话缓存，只在会话内容发生变化（新轮次、切换/新增对话、标题变化等）时更新；空闲时不轮询，生成中的会话会低频刷新；右上角刷新按钮可强制重新加载；
-- 当前所在节点用主题绿色圆点；选中节点用主题强调色；「你在这里」保持绿色；
-- 分支叶子节点仍与对话区会话标题同步：在对话区改名会同步到树的叶子；在树上重命名也会同步回会话标题；中间轮次节点的标签只影响树内展示；
-- 从标题栏打开时，对话树出现在**右侧边栏**里，对话区保持可见；边栏的关闭、宽度调整由宿主提供；会话视图切换到「对话树」标签页时，输入框自动隐藏；
-- 右侧详情的提问框 / 回答框设置最大高度：内容短时自动收缩，超过上限才在框内向下滚动；复制按钮固定在框上方；
-- 右侧详情和悬停预览里的提问 / 回答都按 Markdown 渲染（标题、列表、代码块、表格、链接、强调等）；右侧提问 / 回答框上方有「复制」按钮，复制成功后短暂显示「已复制」；
-- **两个入口**：
-  - 标题栏右上角的「对话树」按钮：打开右侧边栏里的「对话树」标签页；边栏本身负责关闭和拖动宽度，对话区保持可见；
-  - 会话视图里的「对话树」标签页：和「对话 / 轨迹 / 上下文」并排，全宽显示画布 + 右侧详情；此标签页激活时输入框隐藏，切回「对话」即可继续输入；对话区的宽度拖拽手柄在此标签页下也会停用，避免误出现横向缩放光标；
-  - 没有第三个入口，也不再有任何浮动遮罩层；
-- 重命名 / 归档 / 分叉按钮固定显示在右侧详情的标题下方，不再藏在长对话底部；
-- 每次对话结束后的分叉统一使用宿主自带的「在新对话中分支」，插件不再额外加「分叉」按钮；树节点详情里的「分叉」用于从任意旧节点开分支；
-- 新分支不再自动归档，会直接出现在左侧工作区；每个非根节点在详情里有「归档」；
-- **归档同步**：已归档的分支不在树里显示；在左侧取消归档后，它会自动回到树里。
+版本 **1.0.1** · MIT · DeepSeek Harness Web 插件
 
-## 为什么底层是 fork
+## 功能介绍
 
-DSH 的会话日志是 append-only 的线性 surface，聊天区只渲染「追加」消息。
-在一个物理会话里用 `surfaceOp: replace` 切分支，只会改变模型看到的内容，
-不会改变聊天记录；要做到「界面也跟着切」，只能重写整套 Chat 渲染层。
-
-DSH 官方支持的分支原语是 fork：把某一轮之前的完整事件前缀复制成子会话。
-子会话的聊天区显示的就是「到该轮为止的同一段对话」，因此切分支看起来是
-「回到那一轮」，不是打开一个新对话。TreeCom 把这个过程藏在一个树面板后面。
-
-## 环境要求
-
-- DeepSeek Harness（Web UI），已启用本地插件/bundle。
-- 插件是纯 JavaScript，无构建步骤；Host 半与 Client 半都在仓库里。
+- **两个入口**：标题栏右上角的「对话树」按钮打开右侧边栏；会话视图中的「对话树」标签页全宽显示画布和详情。
+- **画布树**：根节点在上方，分支向下生长；拖动空白处平移，滚轮或触控板缩放，树可以无限延伸。
+- **查看节点**：点击节点只会选中并在右侧显示详情，不会切换分支；点「回到这一轮」才会切到该分支并定位。
+- **悬停预览**：鼠标停在节点上可快速查看本轮提问、上下文占用和后续轮数；移入预览框不会消失，可直接选中文字、滚动查看完整问答。
+- **分叉**：在节点详情里点「分叉」创建新分支；新分支会从父节点逐渐生长出来，并自动获得焦点。空白分支可以直接在右侧的「提问」框里开始对话。
+- **详情面板**：显示上下文占用、后续轮数、完整提问 / 回答，支持 Markdown 渲染、复制、重命名、归档和分叉。
+- **连续轮次折叠**：没有分叉的连续轮次会合并成一个带数字的节点，点击展开；展开后可折叠上方部分。
+- **左侧分组**：左侧会话按对话树分组，同一根节点的会话放在一起，可整体展开 / 收起；当前对话树带一个绿色圆点，生成中时闪烁。
+- **树管理**：树文件夹和「全部对话树」列表都支持删除整棵树；删除前会确认，并归档树内所有会话。
 
 ## 安装
 
-`dsh plugin` 会把参数转发给 profile 目录里的 pnpm，因此 npm 包名、`github:`、`link:`、`file:` 等 pnpm 支持的 spec 都可以。
+`dsh plugin` 会把参数转发给 profile 目录里的 pnpm，npm 包名、`github:`、`link:`、`file:` 等 spec 都支持。
 
-从 npm 安装：
+**从 npm 安装：**
 
 ```bash
 dsh plugin --profile web add dsh-treecom
 ```
 
-也可以直接从 GitHub 安装（不经过 npm）：
+**从 GitHub 安装：**
 
 ```bash
 dsh plugin --profile web add github:Serenity-2026/dsh-treecom
 ```
 
-本地开发时，克隆后把目录 link 进 profile：
+**本地开发：**
 
 ```bash
 git clone https://github.com/Serenity-2026/dsh-treecom.git
 dsh plugin --profile web add link:"$PWD/dsh-treecom"
 ```
 
-安装或更新后刷新 DSH Web 页面（Host 半的 `/treecom` 路由需要重新加载）。
+安装或更新后需要重新启动 DSH Host，并刷新 Web 页面。
 
-> 仓库名和 npm 包名都是 `dsh-treecom`；Host 内部的 bundle id 仍是 `treecom`，不影响安装。
+## 如何使用
 
-## 使用
-
-画布的缩放和位置会按会话树记住：从侧边栏切到「对话树」标签页、重新打开面板或切换分支再回来时，画布会回到上次的位置，而不是每次都跳回根节点。
-
-
-1. 点标题栏右上角的「对话树」打开右侧边栏，或使用会话视图里的「对话树」标签页；
-2. 拖动空白处平移画布；滚轮 / 触控板缩放，节点始终按树形展开；没有分叉的连续轮次会折叠成一个节点，点击展开；
-3. 点任意节点，在右侧查看该轮详情；点「回到这一轮」才切换分支并定位到那一轮；
-4. 悬停节点可快速看本轮提问、上下文占用和后续轮数；鼠标移进预览框后可继续滚轮查看完整对话；
-5. 在详情里「分叉」开新分支，新分支会作为普通会话出现在左侧，但当前对话区仍然停在原分支；新节点会在约 0.6 秒内从父节点位置逐渐生长出来，不再瞬间出现；
-6. 分叉创建后会显示「分支创建成功，正在刷新对话树…」的进度提示；刷新完成前树上的选择、拖动、缩放、详情操作和刷新按钮都会锁定，完成后提示「分支已创建，对话树已刷新」；
-7. 分叉完成后，树的选中状态和视野会自动移到新分支；新分支详情里会显示「回到这一轮」，点击即可切到该分支并继续提问；
-8. 在详情里「重命名」改名，对话区会话标题会同步；叶子节点也会同步显示会话标题；
-9. 在详情里「归档」把分支移出树；在左侧取消归档即可恢复。
-
-## 结构与数据
-
-- `index.js`：Host 半。只读索引 `/treecom`，读 `sessionQuery` 的会话日志，
-  把轮次按 `inheritedEventCount` 归一化，共享主干只画一次；标签写到
-  `~/.dsh/storages/treecom/state.json`。不写任何会话日志。
-- `plugin.client.js`：Client 半。可平移/缩放画布树、右侧详情面板、标题栏入口、
-  会话视图「对话树」标签页；数据按会话缓存，会话变化时刷新；fork/切换走正常 Client 服务。
-- `locale/`：中英文案；`icon.svg`：插件图标；`cordis.patch.yml`：bundle 挂载行。
-
-所有数据都在本地：树索引读本地会话日志，标签写本地 sidecar 文件，只与本机 DSH 的 `/treecom` 路由通信，不发起外部网络请求。
-
-## 已知边界
-
-- 底层每个分支是一条 fork 会话，会正常出现在左侧工作区（标题带 (1)、(2) 后缀）。
-- 点节点的「分叉」才会创建分支；如果随后不提问，会留下一个空分支，
-  在树里显示为「新分支 · 等待提问」；它也会出现在侧栏，可在节点上归档，或在左侧取消归档恢复。
-- 当前分支正在生成时，分叉按钮、树上的分叉动作和归档按钮会禁用；
-- 刷新按钮会转圈，完成后弹出「刷新成功」提示；点击时会清掉该会话缓存并强制重新请求 `/treecom`，不会因为缓存而看起来没有变化；空闲时不会自动轮询，避免反复重绘；生成中的会话会低频刷新；
-- 卸载插件后所有会话仍在；归档的分支可在 DSH 的归档列表里取消归档。
-
-## License
-
-MIT © 2026 Minchuan Deng
-
-### Ask a blank branch from the tree
-
-Select a newly forked “新分支 / 等待提问” node, type directly into the 提问 box in the right detail pane, and press Enter. The question is sent to that branch’s own session, the current branch switches to the new turn (the green dot moves), the 对话树 tab is reopened, and the answer streams into the same 回答 box. The child tree is prefetched before the switch so it appears instantly.
-
-### Collapse parent subtrees
-
-Select a node that has children and use 「收起子节点 / 展开子节点」 in its detail header. Collapsing hides the complete subtree; expanding restores the previous nested state — a child that was expanded before stays expanded.
-
-### Promote a branch into a new tree
-
-Long-press a non-root node on the canvas and drag it to the top drop banner (「拖到这里，设为新树根」). This creates a new tree view rooted at that node and keeps the original tree intact. The promoted root is stored per folder and listed in the all-trees list.
-
-Use the header switcher to choose 「当前对话树」 (default) or 「全部对话树」. The all-trees view is a list of every root conversation tree in the same folder (promoted views are not separate session trees); clicking an item opens that tree. The all-trees list uses the new Host `forest` action, so restart the Host once after updating.
-
-The tree title is the name of its root node. In the detail header, each node is titled by its own name; an unnamed turn defaults to the first 10 characters of its question followed by an ellipsis.
-
-### Grouped left sidebar
-
-Sessions in the left sidebar are grouped by their conversation tree root. Each group gets a folder row with a chevron: clicking it collapses or expands every fork under that root. The folder for the tree containing the currently selected conversation shows a small green dot before its folder icon.
-
-- Tree folder headers and all-tree rows have a delete action; deleting a tree asks for confirmation and archives every conversation in it.
+1. 点标题栏右上角的「对话树」，或切换到会话视图里的「对话树」标签页。
+2. 拖动空白区域平移画布，滚轮缩放；用左上角「回到当前」定位当前叶子，用「居中」把树移回视野。
+3. 点击任意节点查看右侧详情；点「回到这一轮」切换到该分支继续对话。
+4. 在详情里点「分叉」创建新分支。新分支会出现在左侧工作区，但当前对话区仍停留在原分支；点击新分支详情里的「回到这一轮」即可切过去。
+5. 对「新分支 / 等待提问」节点，可以直接在右侧「提问」框输入问题并发送，回答会显示在同一个「回答」框中。
+6. 用详情里的「重命名」「归档」管理分支；左侧取消归档后，分支会重新回到树里。
+7. 连续无分叉的轮次会折叠成带数字的节点，点击展开；悬停展开后的节点可只折叠上方部分。
