@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.5.1 — 2026-11-01
+
+- Running status is now per-node: only the leaf turn that is actually generating is labeled “生成中”; its ancestors show “存在子节点正在生成中”. The canvas node state, hover preview, and right-side detail pane use the same distinction.
+
 ## 0.5.0 — 2026-11-01
 
 - The canvas remembers its camera per conversation tree (zoom, center, and pan), so opening the right sidebar, switching to the Conversation tree tab, or returning to a branch resumes the previous view instead of snapping back to the root.
