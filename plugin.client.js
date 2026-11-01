@@ -2890,7 +2890,7 @@ body.tc-view-tree-open [data-width-handle]::after{display:none!important}
 .tc-canvas-node--active .tc-canvas-node-dot{border-color:var(--dsw-alias-state-success-primary);background:var(--dsw-alias-state-success-primary);color:var(--dsw-alias-bg-base)}
 .tc-canvas-node--running .tc-canvas-node-dot{border-color:var(--tc-run-blue);animation:tc-node-pulse 1.6s ease-in-out infinite}
 .tc-canvas-node--active.tc-canvas-node--running .tc-canvas-node-dot{background:var(--tc-run-blue);border-color:var(--tc-run-blue);color:var(--dsw-alias-bg-base)}
-.tc-canvas-node--child-running .tc-canvas-node-dot{border-color:var(--tc-run-blue);box-shadow:0 0 0 2px color-mix(in srgb,var(--tc-run-blue) 20%,transparent)}
+.tc-canvas-node--child-running .tc-canvas-node-dot{background:var(--tc-run-blue);border-color:var(--tc-run-blue);color:var(--dsw-alias-bg-base);box-shadow:0 0 0 2px color-mix(in srgb,var(--tc-run-blue) 20%,transparent)}
 @keyframes tc-node-pulse{0%,100%{box-shadow:0 0 0 0 color-mix(in srgb,var(--tc-run-blue) 0%,transparent)}50%{box-shadow:0 0 0 6px color-mix(in srgb,var(--tc-run-blue) 24%,transparent)}}
 .tc-canvas-toolbar{position:absolute;left:12px;top:10px;z-index:6;display:flex;gap:6px}
 .tc-canvas-btn{height:24px;padding:0 8px;border:1px solid var(--dsw-alias-border-l1);border-radius:6px;background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-secondary);font:inherit;font-size:11px;cursor:pointer;white-space:nowrap}

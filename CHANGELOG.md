@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Ancestor nodes with a generating descendant now use the same solid light-blue dot as the generating leaf instead of a hollow ring.
+
 ## 0.5.2 — 2026-11-01
 
 - Generating status now uses a light-blue accent, while the “you are here” marker stays green. The running leaf, its ancestor “child generating” state, the hover preview, and the detail badges all use the light-blue generation color.
