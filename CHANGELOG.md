@@ -2,6 +2,7 @@
 
 ## 1.0.0 — 2026-11-01
 
+- The green dot on the current tree folder now pulses while that tree is generating and returns to a steady dot when generation stops.
 - The 居中 button now fits and centers the whole tree into the viewport instead of centering at the current zoom, so the tree no longer ends up off-screen in an empty area.
 - All-trees now hides archived roots, so a deleted tree disappears from the list immediately; deleting a tree archives every session and removes the row from both entry points.
 - Group conversation trees under their workspace, with an in-place chevron and a blue tree icon when expanded.

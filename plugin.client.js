@@ -3668,6 +3668,9 @@ body.tc-view-tree-open [data-width-handle]::after{display:none!important}
 .tc-left-tree-name{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .tc-left-tree-count{flex:none;margin-left:auto;color:var(--dsw-alias-label-tertiary);font-size:10.5px;font-weight:500;font-variant-numeric:tabular-nums}
 .tc-left-tree-dot{flex:none;width:6px;height:6px;border-radius:50%;background:var(--dsw-alias-state-success-primary);box-shadow:0 0 0 2px color-mix(in srgb,var(--dsw-alias-state-success-primary) 18%,transparent)}
+.tc-left-tree-dot--running{animation:tc-left-tree-dot-pulse 1.1s ease-in-out infinite}
+@keyframes tc-left-tree-dot-pulse{0%,100%{opacity:1;transform:scale(1)}50%{opacity:.3;transform:scale(.72)}}
+@media (prefers-reduced-motion:reduce){.tc-left-tree-dot--running{animation:none;opacity:.55}}
 .tc-confirm-backdrop{position:fixed;inset:0;z-index:2147483000;display:flex;align-items:center;justify-content:center;padding:20px;background:rgba(0,0,0,.42)}
 .tc-confirm{width:min(380px,92vw);box-sizing:border-box;padding:18px;border:1px solid var(--dsw-alias-border-l2);border-radius:12px;background:var(--dsw-alias-bg-layer-1);box-shadow:0 18px 50px rgba(0,0,0,.35);color:var(--dsw-alias-label-primary)}
 .tc-confirm-title{font-size:14px;font-weight:700;line-height:1.4}
@@ -3868,6 +3871,11 @@ body.tc-view-tree-open [data-width-handle]::after{display:none!important}
             row.classList.remove('tc-left-tree-row--collapsed')
           }
           const currentRoot = selectedRoot(byId)
+          const runningRoots = new Set()
+          for (const [id, session] of Object.entries(byId)) {
+            if (session?.running !== true) continue
+            runningRoots.add(rootBySession.get(id) ?? rootOf(id, byId))
+          }
           const workspaceRows = [...document.querySelectorAll('[data-row-key^="workspace:"]')]
           for (const workspaceRow of workspaceRows) {
             let section = workspaceRow.parentElement
@@ -3944,9 +3952,10 @@ body.tc-view-tree-open [data-width-handle]::after{display:none!important}
               count.textContent = String(group.rows.length)
               head.append(chevron)
               if (group.root === currentRoot) {
+                const running = runningRoots.has(group.root)
                 const dot = document.createElement('span')
-                dot.className = 'tc-left-tree-dot'
-                dot.title = translate('node.youAreHere')
+                dot.className = `tc-left-tree-dot${running ? ' tc-left-tree-dot--running' : ''}`
+                dot.title = running ? translate('node.running') : translate('node.youAreHere')
                 head.append(dot)
               }
               const remove = document.createElement('button')
@@ -4002,13 +4011,18 @@ body.tc-view-tree-open [data-width-handle]::after{display:none!important}
             head.classList.toggle('tc-left-tree-head--current', current)
             const dot = head.querySelector('.tc-left-tree-dot')
             if (current && dot === null) {
+              const running = runningRoots.has(liveCurrentRoot)
               const next = document.createElement('span')
-              next.className = 'tc-left-tree-dot'
-              next.title = translate('node.youAreHere')
+              next.className = `tc-left-tree-dot${running ? ' tc-left-tree-dot--running' : ''}`
+              next.title = running ? translate('node.running') : translate('node.youAreHere')
               const folder = head.querySelector('.tc-left-tree-folder')
               head.insertBefore(next, folder)
             } else if (!current && dot !== null) {
               dot.remove()
+            } else if (current && dot !== null) {
+              const running = runningRoots.has(liveCurrentRoot)
+              dot.classList.toggle('tc-left-tree-dot--running', running)
+              dot.title = running ? translate('node.running') : translate('node.youAreHere')
             }
           }
         } finally {
