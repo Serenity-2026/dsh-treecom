@@ -1190,7 +1190,7 @@ window.__ModuleLoader__.load({
       const leafCount = Math.max(1, cursor)
       const width = padding * 2 + Math.max(0, leafCount - 1) * leafGap
       const height = padding * 2 + maxDepth * levelGap
-      return { positions, edges, width: Math.max(160, width), height: Math.max(160, height) }
+      return { positions, edges, width: Math.max(160, width), height: Math.max(160, height), padding, levelGap }
     }
 
     /* The canvas belongs to a conversation family, not to whichever fork
@@ -1366,7 +1366,22 @@ window.__ModuleLoader__.load({
 
     function TreeCanvas(props) {
       const { index, layoutIndex, hiddenIds, selectedId, activeId, selectedPath, afterFor, chainByRep, chainByMember, onExpand, onCollapse, onSelect, sessionId, rootId, locked, focusNodeId, generatingIds, childGeneratingIds, onPromote } = props
-      const layout = useMemo(() => layoutTree(layoutIndex ?? index, hiddenIds), [index, layoutIndex, hiddenIds])
+      const layout = useMemo(() => {
+        const raw = layoutTree(layoutIndex ?? index, hiddenIds)
+        if (layoutIndex === undefined || layoutIndex === null) return raw
+        const displayDepth = new Map()
+        const visit = (node, depth) => {
+          displayDepth.set(node.id, depth)
+          for (const child of index.children.get(node.id) ?? []) visit(child, depth + 1)
+        }
+        for (const root of index.roots) visit(root, 0)
+        const positions = new Map(raw.positions)
+        for (const [id, position] of raw.positions) {
+          const depth = displayDepth.get(id)
+          if (depth !== undefined) positions.set(id, { ...position, y: raw.padding + depth * raw.levelGap })
+        }
+        return { ...raw, positions }
+      }, [index, layoutIndex, hiddenIds])
       const wrapRef = useRef(null)
       const [pan, setPan] = useState({ x: 0, y: 0 })
       const [zoom, setZoom] = useState(1)
