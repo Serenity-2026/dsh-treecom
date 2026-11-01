@@ -112,6 +112,7 @@ window.__ModuleLoader__.load({
       'notice.noService': '这个环境缺少会话服务，无法分叉。',
       'notice.askFailed': '提问失败：{message}',
       'notice.askSent': '已发送，正在等待回答',
+      'notice.askSending': '正在发送问题…',
       'notice.noAccess': '没有分叉这个会话的权限。',
       'notice.renameFailed': '改名失败：{message}',
       'notice.archiveFailed': '归档失败：{message}',
@@ -199,6 +200,7 @@ window.__ModuleLoader__.load({
       'notice.noService': 'Session services are unavailable here, so branching is disabled.',
       'notice.askFailed': 'Could not send the question: {message}',
       'notice.askSent': 'Question sent; waiting for the answer',
+      'notice.askSending': 'Sending the question…',
       'notice.noAccess': 'This session cannot be forked.',
       'notice.renameFailed': 'Rename failed: {message}',
       'notice.archiveFailed': 'Archive failed: {message}',
@@ -2159,6 +2161,7 @@ window.__ModuleLoader__.load({
       const [refreshing, setRefreshing] = useState(false)
       const [toast, setToast] = useState(null)
       const [forkPhase, setForkPhase] = useState(null)
+      const [asking, setAsking] = useState(false)
       const [focusNodeId, setFocusNodeId] = useState(null)
       const [selectedId, setSelectedId] = useState(null)
       const [collapsed, setCollapsed] = useState(() => new Set())
@@ -2334,6 +2337,7 @@ window.__ModuleLoader__.load({
           throw error
         }
         setBusy(true)
+        setAsking(true)
         try {
           const result = await sessions.using(node.sessionId, { source: 'workspaceOperation' }, (reference) => (
             reference.binding.session.prompt([{ type: 'text', text }], 'queue')
@@ -2351,15 +2355,21 @@ window.__ModuleLoader__.load({
             await new Promise((resolve) => setTimeout(resolve, 300))
             nextData = await reload(true)
           }
-          if (childNode !== null) {
-            setSelectedId(childNode.id)
-            setFocusNodeId(childNode.id)
+          const nextSelected = childNode !== null ? childNode.id : node.id
+          selectionIntent = { sessionId: node.sessionId, nodeId: nextSelected }
+          setSelectedId(nextSelected)
+          setFocusNodeId(nextSelected)
+          try {
+            await switchTo(node.sessionId, true)
+          } catch {
+            selectionIntent = null
           }
           showToast(translate('notice.askSent'))
         } catch (error) {
           setNotice(fmt(translate('notice.askFailed'), { message: noticeText(error) }))
           throw error
         } finally {
+          setAsking(false)
           setBusy(false)
         }
       }
@@ -2737,7 +2747,7 @@ window.__ModuleLoader__.load({
             disabled: treeLocked,
             spinning: refreshing,
           })),
-        busy ? h('div', { className: 'tc-notice tc-notice--busy' }, translate('action.busy')) : null,
+        busy ? h('div', { className: 'tc-notice tc-notice--busy' }, asking ? translate('notice.askSending') : translate('action.busy')) : null,
         notice === null ? null : h('div', { className: 'tc-notice' }, notice),
         error === null ? null : h('div', { className: 'tc-notice' }, `${translate('panel.error')}：${error}`),
         data.errors !== undefined && data.errors.length > 0 ? h('div', { className: 'tc-warn' }, translate('panel.partial')) : null,
