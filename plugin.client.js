@@ -112,7 +112,6 @@ window.__ModuleLoader__.load({
       'notice.noService': '这个环境缺少会话服务，无法分叉。',
       'notice.askFailed': '提问失败：{message}',
       'notice.askSent': '已发送，正在等待回答',
-      'notice.askSending': '正在发送问题…',
       'notice.noAccess': '没有分叉这个会话的权限。',
       'notice.renameFailed': '改名失败：{message}',
       'notice.archiveFailed': '归档失败：{message}',
@@ -200,7 +199,6 @@ window.__ModuleLoader__.load({
       'notice.noService': 'Session services are unavailable here, so branching is disabled.',
       'notice.askFailed': 'Could not send the question: {message}',
       'notice.askSent': 'Question sent; waiting for the answer',
-      'notice.askSending': 'Sending the question…',
       'notice.noAccess': 'This session cannot be forked.',
       'notice.renameFailed': 'Rename failed: {message}',
       'notice.archiveFailed': 'Archive failed: {message}',
@@ -2345,24 +2343,15 @@ window.__ModuleLoader__.load({
           if (result === undefined || result.ok !== true) {
             throw new Error(result?.error?.message ?? translate('node.asking'))
           }
-          let nextData = await reload(true)
-          let childNode = null
-          for (let attempt = 0; attempt < 8; attempt += 1) {
-            childNode = nextData.nodes
-              .filter((candidate) => candidate.sessionId === node.sessionId && candidate.kind === 'turn')
-              .sort((left, right) => (right.turn ?? 0) - (left.turn ?? 0))[0] ?? null
-            if (childNode !== null) break
-            await new Promise((resolve) => setTimeout(resolve, 300))
-            nextData = await reload(true)
-          }
-          const nextSelected = childNode !== null ? childNode.id : node.id
-          selectionIntent = { sessionId: node.sessionId, nodeId: nextSelected }
-          setSelectedId(nextSelected)
-          setFocusNodeId(nextSelected)
-          try {
-            await switchTo(node.sessionId, true)
-          } catch {
-            selectionIntent = null
+          /* The prompt has been accepted. Switch immediately instead of
+             waiting for a parent-tree refresh: the fork child is already
+             visible, and opening it makes the green “current” dot move to the
+             new turn without depending on unarchive/reload promises. */
+          selectionIntent = null
+          const workspace = appCtx?.get('uiWorkspace')
+          if (workspace) {
+            workspace.openSession(node.sessionId)
+            refreshAll()
           }
           showToast(translate('notice.askSent'))
         } catch (error) {
@@ -2747,7 +2736,7 @@ window.__ModuleLoader__.load({
             disabled: treeLocked,
             spinning: refreshing,
           })),
-        busy ? h('div', { className: 'tc-notice tc-notice--busy' }, asking ? translate('notice.askSending') : translate('action.busy')) : null,
+        busy && asking !== true ? h('div', { className: 'tc-notice tc-notice--busy' }, translate('action.busy')) : null,
         notice === null ? null : h('div', { className: 'tc-notice' }, notice),
         error === null ? null : h('div', { className: 'tc-notice' }, `${translate('panel.error')}：${error}`),
         data.errors !== undefined && data.errors.length > 0 ? h('div', { className: 'tc-warn' }, translate('panel.partial')) : null,
