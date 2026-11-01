@@ -1821,21 +1821,26 @@ window.__ModuleLoader__.load({
           h('span', { className: 'tc-canvas-node-dot' }, node.kind === 'root' ? h(Icon, { name: 'tree', size: 11 }) : null)))
       }
 
-      const edges = layout.edges.map(([fromId, toId]) => {
-        if (!index.byId.has(fromId) || !index.byId.has(toId)) return null
+      /* Positions come from the full layout so collapsing never moves an
+         ancestor; edges come from the display tree so a chain representative
+         is still connected to its visible parent. */
+      const edges = []
+      for (const node of index.byId.values()) {
+        const fromId = node.parentId
+        if (fromId === null || fromId === undefined || !index.byId.has(fromId)) continue
         const from = layout.positions.get(fromId)
-        const to = layout.positions.get(toId)
-        if (from === undefined || to === undefined) return null
+        const to = layout.positions.get(node.id)
+        if (from === undefined || to === undefined) continue
         const midY = (from.y + to.y) / 2
         const d = `M ${from.x} ${from.y} C ${from.x} ${midY}, ${to.x} ${midY}, ${to.x} ${to.y}`
-        const growing = growingIds.has(toId)
-        return h('path', {
-          key: `${fromId}>${toId}`,
+        const growing = growingIds.has(node.id)
+        edges.push(h('path', {
+          key: `${fromId}>${node.id}`,
           d,
           pathLength: growing ? 1 : undefined,
-          className: `tc-canvas-edge${selectedPath.has(toId) ? ' tc-canvas-edge--path' : ''}${growing ? ' tc-canvas-edge--grow' : ''}`,
-        })
-      }).filter((edge) => edge !== null)
+          className: `tc-canvas-edge${selectedPath.has(node.id) ? ' tc-canvas-edge--path' : ''}${growing ? ' tc-canvas-edge--grow' : ''}`,
+        }))
+      }
 
       let tipElement = null
       if (tip !== null) {
