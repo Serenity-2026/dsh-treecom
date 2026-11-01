@@ -1516,6 +1516,27 @@ window.__ModuleLoader__.load({
         setPan(nextPan)
       }
 
+      const fitTree = () => {
+        const wrap = wrapRef.current
+        if (wrap === null) return
+        const rect = wrap.getBoundingClientRect()
+        if (rect.width === 0 || rect.height === 0 || layout.width <= 0 || layout.height <= 0) return
+        const padding = 40
+        const fit = Math.min(
+          (rect.width - padding * 2) / layout.width,
+          (rect.height - padding * 2) / layout.height,
+        )
+        const scale = Math.min(1, Math.max(0.3, fit))
+        zoomRef.current = scale
+        const nextPan = {
+          x: (rect.width - layout.width * scale) / 2,
+          y: (rect.height - layout.height * scale) / 2,
+        }
+        panRef.current = nextPan
+        setZoom(scale)
+        setPan(nextPan)
+      }
+
       const ensureVisible = (id) => {
         const wrap = wrapRef.current
         if (wrap === null) return
@@ -2038,7 +2059,7 @@ window.__ModuleLoader__.load({
             onPointerDown: (event) => event.stopPropagation(),
             onClick: (event) => {
               event.stopPropagation()
-              centerOn(null)
+              fitTree()
             },
           }, translate('node.fit'))),
         h('div', { className: 'tc-canvas-hint' }, translate('node.canvasHint')),
