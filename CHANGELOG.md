@@ -2,7 +2,8 @@
 
 ## Unreleased
 
-- Forking from a tree node now keeps the current conversation tree open instead of switching to the newly created child conversation.
+- Forking from a tree node now keeps the current conversation tree open (no unarchive/open-session focus) instead of switching to the newly created child conversation.
+- Newly visible tree nodes and their edges animate out from their parent node instead of appearing abruptly.
 
 ## 0.3.0 — 2026-10-31
 

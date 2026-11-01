@@ -537,21 +537,15 @@ window.__ModuleLoader__.load({
 
     async function forkAt(node) {
       const sessions = appCtx?.get('sessions')
-      const workspace = appCtx?.get('uiWorkspace')
-      if (!sessions || !workspace) throw new Error(translate('notice.noService'))
+      if (!sessions) throw new Error(translate('notice.noService'))
       if (!Number.isSafeInteger(node.endSeq)) throw new Error(translate('notice.busyFork'))
       const childId = await sessions.fork({
         sessionId: node.sessionId,
         atSeq: node.endSeq,
         increaseTitle: true,
       })
-      try {
-        await workspace.unarchiveSession(childId)
-      } catch {
-        /* a fresh child is normally visible already */
-      }
-      /* Keep the current conversation tree open. The new branch appears in
-         the tree after refresh; forking must not navigate to the child. */
+      /* A fresh fork is already visible. Do not unarchive/open it: both can
+         focus the child and make the tree jump away from the current branch. */
       refreshAll()
       return childId
     }
@@ -1223,10 +1217,34 @@ window.__ModuleLoader__.load({
       const centeredSession = useRef(null)
       const panRef = useRef(pan)
       const zoomRef = useRef(1)
+      const knownNodeLayout = useRef({ sessionId: null, ids: new Set() })
+      const [growingIds, setGrowingIds] = useState(() => new Set())
 
       useEffect(() => {
         panRef.current = pan
       }, [pan])
+
+      useEffect(() => {
+        const current = new Set(layout.positions.keys())
+        const previous = knownNodeLayout.current
+        if (previous.sessionId !== sessionId) {
+          knownNodeLayout.current = { sessionId, ids: current }
+          setGrowingIds(new Set())
+          return undefined
+        }
+        const fresh = new Set()
+        for (const id of current) {
+          if (!previous.ids.has(id)) fresh.add(id)
+        }
+        knownNodeLayout.current = { sessionId, ids: current }
+        if (fresh.size === 0) {
+          setGrowingIds((existing) => (existing.size === 0 ? existing : new Set()))
+          return undefined
+        }
+        setGrowingIds(fresh)
+        const timer = setTimeout(() => setGrowingIds(new Set()), 560)
+        return () => clearTimeout(timer)
+      }, [layout, sessionId])
 
       const centerOn = (id, alignTop = false) => {
         const wrap = wrapRef.current
@@ -1438,11 +1456,21 @@ window.__ModuleLoader__.load({
           index.sessionById.get(node.sessionId)?.running === true ? 'tc-canvas-node--running' : '',
         ].filter((value) => value !== '').join(' ')
         const question = node.prompt || node.label || translate('node.blank')
+        const growing = growingIds.has(id)
+        const growClasses = growing ? `${classes} tc-canvas-node--grow` : classes
+        const growFrom = node.parentId === null || node.parentId === undefined
+          ? null
+          : layout.positions.get(node.parentId)
+        const nodeStyle = { left: `${position.x}px`, top: `${position.y}px` }
+        if (growing) {
+          nodeStyle['--grow-x'] = `${(growFrom?.x ?? position.x) - position.x}px`
+          nodeStyle['--grow-y'] = `${(growFrom?.y ?? position.y) - position.y}px`
+        }
         nodes.push(h('button', {
           key: id,
           type: 'button',
-          className: classes,
-          style: { left: `${position.x}px`, top: `${position.y}px` },
+          className: growClasses,
+          style: nodeStyle,
           'aria-label': chain !== null
             ? fmt(translate('node.chainAria'), { n: chain.count })
             : (node.kind === 'root' ? translate('path.root') : question),
@@ -1468,10 +1496,12 @@ window.__ModuleLoader__.load({
         if (from === undefined || to === undefined) return null
         const midY = (from.y + to.y) / 2
         const d = `M ${from.x} ${from.y} C ${from.x} ${midY}, ${to.x} ${midY}, ${to.x} ${to.y}`
+        const growing = growingIds.has(toId)
         return h('path', {
           key: `${fromId}>${toId}`,
           d,
-          className: `tc-canvas-edge${selectedPath.has(toId) ? ' tc-canvas-edge--path' : ''}`,
+          pathLength: growing ? 1 : undefined,
+          className: `tc-canvas-edge${selectedPath.has(toId) ? ' tc-canvas-edge--path' : ''}${growing ? ' tc-canvas-edge--grow' : ''}`,
         })
       }).filter((edge) => edge !== null)
 
@@ -2584,6 +2614,11 @@ body.tc-view-tree-open [data-width-handle]::after{display:none!important}
 .tc-canvas-edges{position:absolute;left:0;top:0;overflow:visible;pointer-events:none}
 .tc-canvas-edge{fill:none;stroke:var(--dsw-alias-border-l2);stroke-width:1.4;stroke-linecap:round}
 .tc-canvas-edge--path{stroke:var(--dsw-alias-state-business-primary);stroke-width:2;opacity:.8}
+.tc-canvas-edge--grow{stroke-dasharray:1;stroke-dashoffset:1;animation:tc-edge-grow .42s ease-out .04s both}
+.tc-canvas-node--grow{animation:tc-node-grow .44s cubic-bezier(.2,.9,.2,1) both}
+@keyframes tc-node-grow{from{opacity:0;transform:translate(calc(-50% + var(--grow-x,0px)),calc(-50% + var(--grow-y,0px))) scale(.18)}to{opacity:1;transform:translate(-50%,-50%) scale(1)}}
+@keyframes tc-edge-grow{to{stroke-dashoffset:0}}
+@media (prefers-reduced-motion:reduce){.tc-canvas-node--grow,.tc-canvas-edge--grow{animation:none}}
 .tc-canvas-node{position:absolute;transform:translate(-50%,-50%);display:flex;align-items:center;justify-content:center;width:30px;height:30px;padding:0;border:0;border-radius:50%;background:transparent;color:var(--dsw-alias-label-tertiary);cursor:pointer;outline:none}
 .tc-canvas-node-halo{position:absolute;inset:2px;border-radius:50%;background:transparent;transition:background-color .12s,box-shadow .12s}
 .tc-canvas-node-dot{position:relative;display:flex;align-items:center;justify-content:center;width:12px;height:12px;border-radius:50%;border:1.5px solid var(--dsw-alias-border-l2);background:var(--dsw-alias-bg-base);color:var(--dsw-alias-label-tertiary);transition:background-color .12s,border-color .12s,transform .12s}
