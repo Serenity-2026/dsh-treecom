@@ -13,7 +13,7 @@ window.__ModuleLoader__.load({
   factory(require) {
     const React = require('react')
     const h = React.createElement
-    const { useCallback, useEffect, useMemo, useRef, useState } = React
+    const { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } = React
     let createPortal = null
     try {
       const ReactDOM = require('react-dom')
@@ -1069,6 +1069,39 @@ window.__ModuleLoader__.load({
       return { positions, edges, width: Math.max(160, width), height: Math.max(160, height) }
     }
 
+    /* The canvas belongs to a conversation family, not to whichever fork
+       happens to be active. Keeping its last camera and the set of nodes it
+       has already shown here lets a remount (right sidebar, View tab, or a
+       session switch) continue where the user left it instead of snapping
+       back to the root. */
+    const canvasViewPrefix = 'treecom:canvas:v1:'
+    const canvasSeenByRoot = new Map()
+
+    function canvasViewKey(rootId) {
+      return `${canvasViewPrefix}${rootId}`
+    }
+
+    function readCanvasView(rootId) {
+      try {
+        const raw = localStorage.getItem(canvasViewKey(rootId))
+        if (raw === null) return null
+        const parsed = JSON.parse(raw)
+        if (parsed === null || typeof parsed !== 'object') return null
+        if (!Number.isFinite(parsed.zoom) || !Number.isFinite(parsed.cx) || !Number.isFinite(parsed.cy)) return null
+        return parsed
+      } catch (error) {
+        return null
+      }
+    }
+
+    function writeCanvasView(rootId, view) {
+      try {
+        localStorage.setItem(canvasViewKey(rootId), JSON.stringify(view))
+      } catch (error) {
+        /* Private mode or a full quota: the camera is a nicety, not state. */
+      }
+    }
+
     /* ------------------------------------------------------ markdown -- */
 
     function markdownInline(text, keyPrefix) {
@@ -1208,7 +1241,7 @@ window.__ModuleLoader__.load({
     }
 
     function TreeCanvas(props) {
-      const { index, hiddenIds, selectedId, activeId, selectedPath, afterFor, chainByRep, chainByMember, onExpand, onCollapse, onSelect, sessionId, locked, focusNodeId } = props
+      const { index, hiddenIds, selectedId, activeId, selectedPath, afterFor, chainByRep, chainByMember, onExpand, onCollapse, onSelect, sessionId, rootId, locked, focusNodeId } = props
       const layout = useMemo(() => layoutTree(index, hiddenIds), [index, hiddenIds])
       const wrapRef = useRef(null)
       const [pan, setPan] = useState({ x: 0, y: 0 })
@@ -1222,38 +1255,60 @@ window.__ModuleLoader__.load({
       const dragRef = useRef(null)
       const suppressClick = useRef(false)
       const tipPointerDown = useRef(false)
-      const centeredSession = useRef(null)
+      const initializedRoot = useRef(null)
+      const canvasRootRef = useRef(null)
+      const canvasGrowTimer = useRef(null)
       const focusedNode = useRef(null)
       const panRef = useRef(pan)
       const zoomRef = useRef(1)
-      const knownNodeLayout = useRef({ sessionId: null, ids: new Set() })
       const [growingIds, setGrowingIds] = useState(() => new Set())
 
-      useEffect(() => {
+      useLayoutEffect(() => {
         panRef.current = pan
       }, [pan])
 
-      useEffect(() => {
+      useLayoutEffect(() => {
+        if (rootId === null || rootId === undefined) return undefined
         const current = new Set(layout.positions.keys())
-        const previous = knownNodeLayout.current
-        if (previous.sessionId !== sessionId) {
-          knownNodeLayout.current = { sessionId, ids: current }
-          setGrowingIds(new Set())
-          return undefined
-        }
-        const fresh = new Set()
-        for (const id of current) {
-          if (!previous.ids.has(id)) fresh.add(id)
-        }
-        knownNodeLayout.current = { sessionId, ids: current }
-        if (fresh.size === 0) {
+        const firstMount = canvasRootRef.current === null
+        if (!firstMount && canvasRootRef.current !== rootId) {
+          canvasRootRef.current = rootId
+          if (canvasGrowTimer.current !== null) {
+            clearTimeout(canvasGrowTimer.current)
+            canvasGrowTimer.current = null
+          }
+          canvasSeenByRoot.set(rootId, current)
           setGrowingIds((existing) => (existing.size === 0 ? existing : new Set()))
           return undefined
         }
+        canvasRootRef.current = rootId
+        const previous = canvasSeenByRoot.get(rootId)
+        canvasSeenByRoot.set(rootId, current)
+        if (previous === undefined) return undefined
+        const fresh = new Set()
+        for (const id of current) {
+          if (!previous.has(id)) fresh.add(id)
+        }
+        if (fresh.size === 0) return undefined
+        if (fresh.size > 4) {
+          setGrowingIds((existing) => (existing.size === 0 ? existing : new Set()))
+          return undefined
+        }
+        if (canvasGrowTimer.current !== null) clearTimeout(canvasGrowTimer.current)
         setGrowingIds(fresh)
-        const timer = setTimeout(() => setGrowingIds(new Set()), 1150)
-        return () => clearTimeout(timer)
-      }, [layout, sessionId])
+        canvasGrowTimer.current = setTimeout(() => {
+          canvasGrowTimer.current = null
+          setGrowingIds(new Set())
+        }, 700)
+        return undefined
+      }, [layout, rootId])
+
+      useEffect(() => () => {
+        if (canvasGrowTimer.current !== null) {
+          clearTimeout(canvasGrowTimer.current)
+          canvasGrowTimer.current = null
+        }
+      }, [])
 
       const centerOn = (id, alignTop = false) => {
         const wrap = wrapRef.current
@@ -1270,13 +1325,59 @@ window.__ModuleLoader__.load({
         setPan(nextPan)
       }
 
+      const ensureVisible = (id) => {
+        const wrap = wrapRef.current
+        if (wrap === null) return
+        const position = layout.positions.get(id)
+        if (position === undefined) return
+        const rect = wrap.getBoundingClientRect()
+        if (rect.width === 0 || rect.height === 0) return
+        const scale = zoomRef.current
+        const margin = 56
+        const screenX = panRef.current.x + position.x * scale
+        const screenY = panRef.current.y + position.y * scale
+        let dx = 0
+        let dy = 0
+        if (screenX < margin) dx = margin - screenX
+        else if (screenX > rect.width - margin) dx = (rect.width - margin) - screenX
+        if (screenY < margin) dy = margin - screenY
+        else if (screenY > rect.height - margin) dy = (rect.height - margin) - screenY
+        if (dx === 0 && dy === 0) return
+        const nextPan = { x: panRef.current.x + dx, y: panRef.current.y + dy }
+        panRef.current = nextPan
+        setPan(nextPan)
+      }
+
+      const initView = () => {
+        const wrap = wrapRef.current
+        if (wrap === null || rootId === null || rootId === undefined) return
+        if (wrap.clientWidth < 24 || wrap.clientHeight < 24) return
+        if (initializedRoot.current === rootId) return
+        initializedRoot.current = rootId
+        const stored = readCanvasView(rootId)
+        if (stored !== null) {
+          const nextZoom = Math.min(3, Math.max(0.3, stored.zoom))
+          const nextPan = {
+            x: wrap.clientWidth / 2 - stored.cx * nextZoom,
+            y: wrap.clientHeight / 2 - stored.cy * nextZoom,
+          }
+          zoomRef.current = nextZoom
+          panRef.current = nextPan
+          setZoom(nextZoom)
+          setPan(nextPan)
+          return
+        }
+        zoomRef.current = 1
+        setZoom(1)
+        centerOn(index.roots[0]?.id ?? selectedId ?? activeId ?? null, true)
+      }
+
       useEffect(() => {
         if (tipCloseTimer.current !== null) {
           clearTimeout(tipCloseTimer.current)
           tipCloseTimer.current = null
         }
         setTip(null)
-        centeredSession.current = null
       }, [sessionId])
 
       useEffect(() => {
@@ -1318,20 +1419,40 @@ window.__ModuleLoader__.load({
         }
       }, [])
 
+      useLayoutEffect(() => {
+        initView()
+      }, [rootId, layout])
+
       useEffect(() => {
         const wrap = wrapRef.current
-        if (wrap === null || layout.positions.size === 0) return
-        if (centeredSession.current === sessionId) return
-        centeredSession.current = sessionId
-        centerOn(index.roots[0]?.id ?? selectedId ?? activeId ?? null, true)
-      }, [sessionId, layout, selectedId, activeId])
-      useEffect(() => {
+        if (wrap === null || typeof ResizeObserver === 'undefined') return undefined
+        const observer = new ResizeObserver(() => { initView() })
+        observer.observe(wrap)
+        return () => observer.disconnect()
+      }, [rootId, layout])
+
+      useLayoutEffect(() => {
         if (focusNodeId === null || focusNodeId === undefined) return
         if (focusedNode.current === focusNodeId) return
         if (!layout.positions.has(focusNodeId)) return
         focusedNode.current = focusNodeId
-        centerOn(focusNodeId)
+        ensureVisible(focusNodeId)
       }, [focusNodeId, layout])
+
+      useEffect(() => {
+        if (rootId === null || rootId === undefined) return undefined
+        const wrap = wrapRef.current
+        if (wrap === null || wrap.clientWidth < 24) return undefined
+        const timer = setTimeout(() => {
+          if (wrap.clientWidth < 24 || wrap.clientHeight < 24) return
+          writeCanvasView(rootId, {
+            zoom,
+            cx: (wrap.clientWidth / 2 - pan.x) / zoom,
+            cy: (wrap.clientHeight / 2 - pan.y) / zoom,
+          })
+        }, 180)
+        return () => clearTimeout(timer)
+      }, [pan, zoom, rootId])
 
       useEffect(() => {
         const wrap = wrapRef.current
@@ -1407,8 +1528,8 @@ window.__ModuleLoader__.load({
           pointerId: event.pointerId,
           startX: event.clientX,
           startY: event.clientY,
-          panX: pan.x,
-          panY: pan.y,
+          panX: panRef.current.x,
+          panY: panRef.current.y,
           moved: false,
         }
         setDragging(true)
@@ -1426,7 +1547,11 @@ window.__ModuleLoader__.load({
         const dx = event.clientX - drag.startX
         const dy = event.clientY - drag.startY
         if (Math.abs(dx) + Math.abs(dy) > 4) drag.moved = true
-        if (drag.moved) setPan({ x: drag.panX + dx, y: drag.panY + dy })
+        if (drag.moved) {
+          const nextPan = { x: drag.panX + dx, y: drag.panY + dy }
+          panRef.current = nextPan
+          setPan(nextPan)
+        }
       }
 
       const endDrag = (event) => {
@@ -1976,7 +2101,7 @@ window.__ModuleLoader__.load({
         setExpandedChains(new Set())
         setPrefixCuts({})
         setFocusNodeId(null)
-      }, [sessionId])
+      }, [data?.rootId])
 
       useEffect(() => {
         setOverrides({})
@@ -2220,6 +2345,40 @@ window.__ModuleLoader__.load({
       const displaySelectedId = resolveDisplayId(effectiveSelectedId)
       const displayActiveId = resolveDisplayId(activeLeafId)
 
+      /* Switching branches must not collapse the camera, but it also must not
+         leave the active leaf buried inside a collapsed chain. Expand only the
+         chain that contains the newly active leaf, once per session switch:
+         manual collapses stay collapsed while that branch stays active. */
+      const autoExpandedSession = useRef(null)
+      useLayoutEffect(() => {
+        if (data === null || index === null || data.sessionId !== sessionId) return
+        if (activeLeafId === null) return
+        if (autoExpandedSession.current === sessionId) return
+        autoExpandedSession.current = sessionId
+        if (displayIndex === null) return
+        if (displayIndex.byId.has(activeLeafId)) return
+        const member = displayIndex.chainByMember.get(activeLeafId)
+        if (member === undefined) return
+        if (member.expanded === false) {
+          setExpandedChains((current) => {
+            if (current.has(member.key)) return current
+            const next = new Set(current)
+            next.add(member.key)
+            return next
+          })
+        } else if (member.prefix === true) {
+          setPrefixCuts((current) => {
+            if (current[member.key] === undefined) return current
+            const next = { ...current }
+            delete next[member.key]
+            return next
+          })
+        } else {
+          return
+        }
+        setFocusNodeId(activeLeafId)
+      }, [data, index, sessionId, activeLeafId, displayIndex])
+
       const expandChain = (chain) => {
         if (chain === null || chain === undefined) return
         setPrefixCuts((current) => {
@@ -2451,6 +2610,7 @@ window.__ModuleLoader__.load({
                   onCollapse: collapseAbove,
                   onSelect: (node) => setSelectedId(node.id),
                   sessionId,
+                  rootId: data.rootId,
                   locked: treeLocked,
                   focusNodeId,
                 }),
@@ -2669,12 +2829,13 @@ body.tc-view-tree-open [data-width-handle]::after{display:none!important}
 .tc-canvas-edges{position:absolute;left:0;top:0;overflow:visible;pointer-events:none}
 .tc-canvas-edge{fill:none;stroke:var(--dsw-alias-border-l2);stroke-width:1.4;stroke-linecap:round}
 .tc-canvas-edge--path{stroke:var(--dsw-alias-state-business-primary);stroke-width:2;opacity:.8}
-.tc-canvas-edge--grow{stroke-dasharray:1;stroke-dashoffset:1;animation:tc-edge-grow 1s ease-out .04s both}
-.tc-canvas-node--grow{animation:tc-node-grow 1s cubic-bezier(.2,.9,.2,1) both}
-@keyframes tc-node-grow{from{opacity:0;transform:translate(calc(-50% + var(--grow-x,0px)),calc(-50% + var(--grow-y,0px))) scale(.18)}to{opacity:1;transform:translate(-50%,-50%) scale(1)}}
+.tc-canvas-edge--grow{stroke-dasharray:1;stroke-dashoffset:1;animation:tc-edge-grow .62s ease-out .03s both}
+.tc-canvas-node--grow{animation:tc-node-grow .62s cubic-bezier(.22,.9,.28,1) both}
+@keyframes tc-node-grow{0%{opacity:0;transform:translate(calc(-50% + var(--grow-x,0px)),calc(-50% + var(--grow-y,0px))) scale(.3)}55%{opacity:1}80%{transform:translate(-50%,-50%) scale(1.04)}100%{opacity:1;transform:translate(-50%,-50%) scale(1)}}
 @keyframes tc-edge-grow{to{stroke-dashoffset:0}}
 @media (prefers-reduced-motion:reduce){.tc-canvas-node--grow,.tc-canvas-edge--grow{animation:none}}
-.tc-canvas-node{position:absolute;transform:translate(-50%,-50%);display:flex;align-items:center;justify-content:center;width:30px;height:30px;padding:0;border:0;border-radius:50%;background:transparent;color:var(--dsw-alias-label-tertiary);cursor:pointer;outline:none}
+.tc-canvas-node{position:absolute;transform:translate(-50%,-50%);display:flex;align-items:center;justify-content:center;width:30px;height:30px;padding:0;border:0;border-radius:50%;background:transparent;color:var(--dsw-alias-label-tertiary);cursor:pointer;outline:none;transition:left .26s cubic-bezier(.2,.9,.2,1),top .26s cubic-bezier(.2,.9,.2,1)}
+@media (prefers-reduced-motion:reduce){.tc-canvas-node{transition:none}}
 .tc-canvas-node-halo{position:absolute;inset:2px;border-radius:50%;background:transparent;transition:background-color .12s,box-shadow .12s}
 .tc-canvas-node-dot{position:relative;display:flex;align-items:center;justify-content:center;width:12px;height:12px;border-radius:50%;border:1.5px solid var(--dsw-alias-border-l2);background:var(--dsw-alias-bg-base);color:var(--dsw-alias-label-tertiary);transition:background-color .12s,border-color .12s,transform .12s}
 .tc-canvas-node:hover .tc-canvas-node-halo{background:color-mix(in srgb,var(--dsw-alias-state-business-primary) 12%,transparent)}
