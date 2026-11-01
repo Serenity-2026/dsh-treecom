@@ -3154,7 +3154,7 @@ window.__ModuleLoader__.load({
           className: `tc-mode-btn${treeMode === 'all' ? ' tc-mode-btn--active' : ''}`,
           onClick: () => setTreeMode('all'),
         }, translate('panel.allTrees')))
-      const rootItems = forest?.roots ?? []
+      const rootItems = (forest?.roots ?? []).filter((root) => !archivedIds.has(root.id))
       const promotedItems = []
       const allTreesNode = h('div', { className: 'tc-all-trees' },
         h('div', { className: 'tc-all-hint' }, translate('panel.allTreesHint')),
