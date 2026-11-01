@@ -47,6 +47,7 @@ window.__ModuleLoader__.load({
       'node.blank': '新分支',
       'node.waiting': '等待提问',
       'node.running': '生成中',
+      'node.childRunning': '存在子节点正在生成中',
       'node.open': '未完成',
       'node.rename': '改名',
       'node.archive': '归档',
@@ -127,6 +128,7 @@ window.__ModuleLoader__.load({
       'node.blank': 'New branch',
       'node.waiting': 'Waiting for a question',
       'node.running': 'Generating',
+      'node.childRunning': 'A child node is generating',
       'node.open': 'Open',
       'node.rename': 'Rename',
       'node.archive': 'Archive',
@@ -400,6 +402,27 @@ window.__ModuleLoader__.load({
       const roots = data.nodes.filter((node) => node.parentId === null || node.parentId === undefined)
       const sessionById = new Map(data.sessions.map((session) => [session.id, session]))
       return { byId, children, leaves, leaf, path, chain, roots, sessionById }
+    }
+
+    function runningNodesOf(index) {
+      const generating = new Set()
+      const childGenerating = new Set()
+      if (index === null) return { generating, childGenerating }
+      for (const [sessionId, session] of index.sessionById) {
+        if (session.running !== true) continue
+        const leaf = index.leaves.get(sessionId)
+        if (leaf === undefined) continue
+        generating.add(leaf.id)
+        let parentId = leaf.parentId
+        const seen = new Set()
+        while (parentId !== null && parentId !== undefined && !seen.has(parentId)) {
+          seen.add(parentId)
+          childGenerating.add(parentId)
+          parentId = index.byId.get(parentId)?.parentId ?? null
+        }
+      }
+      for (const id of generating) childGenerating.delete(id)
+      return { generating, childGenerating }
     }
 
     function buildDisplayIndex(index, hiddenIds, expandedChains, prefixCuts) {
@@ -1241,7 +1264,7 @@ window.__ModuleLoader__.load({
     }
 
     function TreeCanvas(props) {
-      const { index, hiddenIds, selectedId, activeId, selectedPath, afterFor, chainByRep, chainByMember, onExpand, onCollapse, onSelect, sessionId, rootId, locked, focusNodeId } = props
+      const { index, hiddenIds, selectedId, activeId, selectedPath, afterFor, chainByRep, chainByMember, onExpand, onCollapse, onSelect, sessionId, rootId, locked, focusNodeId, generatingIds, childGeneratingIds } = props
       const layout = useMemo(() => layoutTree(index, hiddenIds), [index, hiddenIds])
       const wrapRef = useRef(null)
       const [pan, setPan] = useState({ x: 0, y: 0 })
@@ -1597,7 +1620,8 @@ window.__ModuleLoader__.load({
           id === selectedId ? 'tc-canvas-node--selected' : '',
           id === activeId ? 'tc-canvas-node--active' : '',
           selectedPath.has(id) ? 'tc-canvas-node--path' : '',
-          index.sessionById.get(node.sessionId)?.running === true ? 'tc-canvas-node--running' : '',
+          generatingIds?.has(id) === true ? 'tc-canvas-node--running' : '',
+          childGeneratingIds?.has(id) === true ? 'tc-canvas-node--child-running' : '',
         ].filter((value) => value !== '').join(' ')
         const question = node.prompt || node.label || translate('node.blank')
         const growing = growingIds.has(id)
@@ -1653,6 +1677,8 @@ window.__ModuleLoader__.load({
       if (tip !== null) {
         const tipChain = chainByRep?.get(tip.node.id) ?? chainByMember?.get(tip.node.id) ?? null
         const tipContext = contextInfo(tip.node)
+        const tipGenerating = generatingIds?.has(tip.node.id) === true
+        const tipChildGenerating = childGeneratingIds?.has(tip.node.id) === true
         const tipTurn = tip.node.kind === 'root'
           ? translate('path.root')
           : tip.node.kind === 'blank'
@@ -1690,7 +1716,12 @@ window.__ModuleLoader__.load({
         },
           h('div', { className: 'tc-tip-head' },
             h('span', { className: 'tc-tip-turn' }, tipTurn),
-            tip.node.id === activeId ? h('span', { className: 'tc-tip-here' }, translate('node.youAreHere')) : null),
+            tip.node.id === activeId ? h('span', { className: 'tc-tip-here' }, translate('node.youAreHere')) : null,
+            tipGenerating
+              ? h('span', { className: 'tc-tip-badge tc-tip-badge--running' }, translate('node.running'))
+              : tipChildGenerating
+                ? h('span', { className: 'tc-tip-badge tc-tip-badge--child-running' }, translate('node.childRunning'))
+                : null),
           tipChain !== null
             ? (tipChain.prefix === true
                 ? h('div', { className: 'tc-tip-chain' }, fmt(translate('node.chainHint'), { n: tipChain.count }))
@@ -1788,7 +1819,7 @@ window.__ModuleLoader__.load({
 
     function NodeDetailPane(props) {
       const {
-        node, after, afterOnPath, isHere, isLeaf, running, archived,
+        node, after, afterOnPath, isHere, isLeaf, running, childRunning, archived,
         canFork, busy, onJump, onFork, onRename, onArchive,
       } = props
       const [detail, setDetail] = useState(null)
@@ -1945,9 +1976,11 @@ window.__ModuleLoader__.load({
       const badges = []
       if (isHere) badges.push(h('span', { key: 'here', className: 'tc-side-badge tc-side-badge--here' }, translate('node.youAreHere')))
       if (running) badges.push(h('span', { key: 'running', className: 'tc-side-badge tc-side-badge--running' }, translate('node.running')))
+      else if (childRunning) badges.push(h('span', { key: 'child-running', className: 'tc-side-badge tc-side-badge--child-running' }, translate('node.childRunning')))
       else if (node.open === true) badges.push(h('span', { key: 'open', className: 'tc-side-badge' }, translate('node.open')))
       if (archived) badges.push(h('span', { key: 'archived', className: 'tc-side-badge' }, translate('node.archive')))
 
+      const blocking = running === true || childRunning === true
       const actions = []
       if (node.kind === 'turn' || node.kind === 'blank') {
         actions.push(h('button', {
@@ -1965,7 +1998,7 @@ window.__ModuleLoader__.load({
           type: 'button',
           className: 'tc-side-act tc-side-act--primary',
           title: translate('action.branchHint'),
-          disabled: busy || running || canFork !== true,
+          disabled: busy || blocking || canFork !== true,
           onClick: () => onFork(node),
         }, h(Icon, { name: 'plus', size: 13 }), translate('action.branch')))
       }
@@ -1982,7 +2015,7 @@ window.__ModuleLoader__.load({
           type: 'button',
           className: 'tc-side-act',
           title: translate('node.archiveHint'),
-          disabled: busy || running,
+          disabled: busy || blocking,
           onClick: () => onArchive(node.sessionId),
         }, h(Icon, { name: 'archive', size: 13 }), translate('node.archive')))
       }
@@ -2065,6 +2098,7 @@ window.__ModuleLoader__.load({
       const liveRevision = useMemo(() => sessionRevision(liveSessions), [liveSessions])
       const { data, error, reload } = useTree(sessionId, liveRevision, runningActive)
       const index = useMemo(() => (data === null ? null : indexOf(data)), [data])
+      const runningInfo = useMemo(() => runningNodesOf(index), [index])
       const selectedNodeId = selectedId !== null && index !== null && index.byId.has(selectedId)
         ? selectedId
         : (index?.leaf?.id ?? null)
@@ -2573,7 +2607,8 @@ window.__ModuleLoader__.load({
       const paneAfter = selectedNode === null ? { n: 0, onPath: false } : afterFor(selectedNode)
       const paneIsHere = selectedNode !== null && activeLeafId === selectedNode.id
       const paneIsLeaf = selectedNode !== null && index.leaves.get(selectedNode.sessionId)?.id === selectedNode.id
-      const paneRunning = selectedNode !== null && index.sessionById.get(selectedNode.sessionId)?.running === true
+      const paneRunning = selectedNode !== null && runningInfo.generating.has(selectedNode.id)
+      const paneChildRunning = selectedNode !== null && runningInfo.childGenerating.has(selectedNode.id)
       const paneArchived = selectedNode !== null && archivedIds.has(selectedNode.sessionId)
       return h('div', { className: `tc-panel tc-panel--${variant}`, 'aria-busy': treeLocked },
         h('div', { className: 'tc-head' },
@@ -2613,6 +2648,8 @@ window.__ModuleLoader__.load({
                   rootId: data.rootId,
                   locked: treeLocked,
                   focusNodeId,
+                  generatingIds: runningInfo.generating,
+                  childGeneratingIds: runningInfo.childGenerating,
                 }),
                 h(NodeDetailPane, {
                   node: paneNode,
@@ -2621,6 +2658,7 @@ window.__ModuleLoader__.load({
                   isHere: paneIsHere,
                   isLeaf: paneIsLeaf,
                   running: paneRunning,
+                  childRunning: paneChildRunning,
                   archived: paneArchived,
                   canFork,
                   busy,
@@ -2851,6 +2889,7 @@ body.tc-view-tree-open [data-width-handle]::after{display:none!important}
 .tc-canvas-node--active .tc-canvas-node-halo{background:color-mix(in srgb,var(--dsw-alias-state-success-primary) 18%,transparent);box-shadow:0 0 0 3px color-mix(in srgb,var(--dsw-alias-state-success-primary) 20%,transparent)}
 .tc-canvas-node--active .tc-canvas-node-dot{border-color:var(--dsw-alias-state-success-primary);background:var(--dsw-alias-state-success-primary);color:var(--dsw-alias-bg-base)}
 .tc-canvas-node--running .tc-canvas-node-dot{animation:tc-node-pulse 1.6s ease-in-out infinite}
+.tc-canvas-node--child-running .tc-canvas-node-dot{border-color:var(--dsw-alias-state-success-primary);box-shadow:0 0 0 2px color-mix(in srgb,var(--dsw-alias-state-success-primary) 18%,transparent)}
 @keyframes tc-node-pulse{0%,100%{box-shadow:0 0 0 0 color-mix(in srgb,var(--dsw-alias-state-success-primary) 0%,transparent)}50%{box-shadow:0 0 0 6px color-mix(in srgb,var(--dsw-alias-state-success-primary) 18%,transparent)}}
 .tc-canvas-toolbar{position:absolute;left:12px;top:10px;z-index:6;display:flex;gap:6px}
 .tc-canvas-btn{height:24px;padding:0 8px;border:1px solid var(--dsw-alias-border-l1);border-radius:6px;background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-secondary);font:inherit;font-size:11px;cursor:pointer;white-space:nowrap}
@@ -2912,6 +2951,9 @@ body.tc-view-tree-open [data-width-handle]::after{display:none!important}
 .tc-side-badge{padding:0 4px;border:1px solid var(--dsw-alias-border-l1);border-radius:4px;color:var(--dsw-alias-label-tertiary);font-size:10px;line-height:15px;white-space:nowrap}
 .tc-side-badge--here{border-color:var(--dsw-alias-state-success-primary);color:var(--dsw-alias-state-success-primary);font-weight:600}
 .tc-side-badge--running{border-color:var(--dsw-alias-state-success-primary);color:var(--dsw-alias-state-success-primary)}
+.tc-side-badge--child-running{border-color:var(--dsw-alias-state-success-primary);color:var(--dsw-alias-state-success-primary);font-weight:500;opacity:.95}
+.tc-tip-badge{border:1px solid var(--dsw-alias-state-success-primary);border-radius:999px;padding:0 6px;font-size:10px;line-height:17px;color:var(--dsw-alias-state-success-primary);margin-left:6px}
+.tc-tip-badge--child-running{font-weight:500;opacity:.95}
 .tc-side-body{flex:1 1 auto;min-height:0;overflow:auto;padding:12px 16px 18px;display:flex;flex-direction:column;gap:12px;overscroll-behavior:contain}
 .tc-side-empty{padding:18px 0;color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:1.6}
 .tc-side-stats{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:8px}
