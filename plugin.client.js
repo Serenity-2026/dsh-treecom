@@ -330,6 +330,19 @@ window.__ModuleLoader__.load({
       return body
     }
 
+    async function fetchLineage(sessionId) {
+      const response = await fetch(ROUTE, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ action: 'lineage', sessionId }),
+      })
+      const body = await response.json().catch(() => null)
+      if (!response.ok || body === null || body.ok !== true) {
+        throw new Error(body !== null && typeof body.error === 'string' ? body.error : `HTTP ${response.status}`)
+      }
+      return body
+    }
+
     const PROMOTED_KEY = 'treecom:promoted:v1'
     const promotedKey = (cwd) => `${PROMOTED_KEY}:${cwd ?? 'global'}`
     function readPromoted(cwd) {
@@ -3550,6 +3563,10 @@ body.tc-view-tree-open [data-width-handle]::after{display:none!important}
       let scheduled = false
       let applying = false
       let collapsed = new Set()
+      let rootBySession = new Map()
+      let titleByRoot = new Map()
+      let lineageTimer = null
+      let lineageToken = 0
       try {
         const raw = localStorage.getItem(SIDEBAR_COLLAPSED_KEY)
         const value = raw === null ? [] : JSON.parse(raw)
@@ -3567,10 +3584,44 @@ body.tc-view-tree-open [data-width-handle]::after{display:none!important}
           current = parent
         }
       }
-      const selectedRoot = (byId) => {
+      const selectedSessionId = () => {
         const selected = document.querySelector('[data-row-key^="session:"][aria-selected="true"]')
-        const id = selected?.getAttribute('data-row-key')?.slice('session:'.length)
-        return typeof id === 'string' && byId[id] !== undefined ? rootOf(id, byId) : null
+        return selected?.getAttribute('data-row-key')?.slice('session:'.length) ?? null
+      }
+      const selectedRoot = (byId) => {
+        const id = selectedSessionId()
+        if (typeof id !== 'string') return null
+        return rootBySession.get(id) ?? (byId[id] !== undefined ? rootOf(id, byId) : null)
+      }
+      const requestLineage = () => {
+        if (disposed) return
+        if (lineageTimer !== null) clearTimeout(lineageTimer)
+        lineageTimer = setTimeout(() => {
+          lineageTimer = null
+          const snapshot = list.getSnapshot()
+          const byId = snapshot?.byId ?? {}
+          const id = selectedSessionId() ?? snapshot?.ids?.[0]
+          if (typeof id !== 'string' || id === '') return
+          const token = ++lineageToken
+          fetchLineage(id).then((body) => {
+            if (disposed || token !== lineageToken) return
+            const nextRoots = new Map()
+            const nextTitles = new Map()
+            for (const row of body.sessions ?? []) {
+              if (typeof row?.id !== 'string' || typeof row?.rootId !== 'string') continue
+              nextRoots.set(row.id, row.rootId)
+              if (row.id === row.rootId && typeof row.title === 'string' && row.title.trim() !== '') {
+                nextTitles.set(row.rootId, row.title.trim())
+              }
+            }
+            for (const [id, session] of Object.entries(byId)) {
+              if (!nextRoots.has(id)) nextRoots.set(id, rootOf(id, byId))
+            }
+            rootBySession = nextRoots
+            titleByRoot = nextTitles
+            schedule()
+          }).catch(() => {})
+        }, 150)
       }
       const saveCollapsed = () => {
         try { localStorage.setItem(SIDEBAR_COLLAPSED_KEY, JSON.stringify([...collapsed])) } catch { /* private mode */ }
@@ -3604,7 +3655,7 @@ body.tc-view-tree-open [data-width-handle]::after{display:none!important}
             for (const row of parentRows) {
               const id = row.getAttribute('data-row-key')?.slice('session:'.length)
               if (typeof id !== 'string' || byId[id] === undefined) continue
-              const root = rootOf(id, byId)
+              const root = rootBySession.get(id) ?? rootOf(id, byId)
               const group = groups.get(root) ?? { root, rows: [] }
               group.rows.push(row)
               groups.set(root, group)
@@ -3622,7 +3673,7 @@ body.tc-view-tree-open [data-width-handle]::after{display:none!important}
             const fragment = document.createDocumentFragment()
             for (const group of ordered) {
               const rootSession = byId[group.root]
-              const title = rootSession?.displayTitle || rootSession?.title || group.root
+              const title = titleByRoot.get(group.root) || rootSession?.displayTitle || rootSession?.title || group.root
               const isCollapsed = collapsed.has(group.root)
               const head = document.createElement('div')
               head.className = `tc-left-tree-head${group.root === currentRoot ? ' tc-left-tree-head--current' : ''}${isCollapsed ? ' tc-left-tree-head--collapsed' : ''}`
@@ -3678,6 +3729,22 @@ body.tc-view-tree-open [data-width-handle]::after{display:none!important}
             parent.insertBefore(fragment, anchor)
             anchor.remove()
           }
+          /* Exactly one folder carries the current-tree dot. */
+          const liveCurrentRoot = selectedRoot(byId)
+          for (const head of document.querySelectorAll('.tc-left-tree-head')) {
+            const current = head.getAttribute('data-treecom-left-head') === liveCurrentRoot
+            head.classList.toggle('tc-left-tree-head--current', current)
+            const dot = head.querySelector('.tc-left-tree-dot')
+            if (current && dot === null) {
+              const next = document.createElement('span')
+              next.className = 'tc-left-tree-dot'
+              next.title = translate('node.youAreHere')
+              const folder = head.querySelector('.tc-left-tree-folder')
+              head.insertBefore(next, folder)
+            } else if (!current && dot !== null) {
+              dot.remove()
+            }
+          }
         } finally {
           if (typeof requestAnimationFrame === 'function') {
             requestAnimationFrame(() => { applying = false })
@@ -3702,6 +3769,7 @@ body.tc-view-tree-open [data-width-handle]::after{display:none!important}
         if (applying) return
         for (const mutation of mutations) {
           if (mutation.type === 'attributes' && mutation.attributeName === 'aria-selected') {
+            requestLineage()
             schedule()
             return
           }
@@ -3717,10 +3785,12 @@ body.tc-view-tree-open [data-width-handle]::after{display:none!important}
         attributes: true,
         attributeFilter: ['aria-selected'],
       })
-      const unsubscribe = typeof list.subscribe === 'function' ? list.subscribe(schedule) : () => {}
+      const unsubscribe = typeof list.subscribe === 'function' ? list.subscribe(() => { requestLineage(); schedule() }) : () => {}
+      requestLineage()
       schedule()
       return () => {
         disposed = true
+        if (lineageTimer !== null) clearTimeout(lineageTimer)
         observer.disconnect()
         unsubscribe()
         for (const old of document.querySelectorAll('[data-treecom-left-head]')) old.remove()

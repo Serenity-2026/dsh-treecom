@@ -68,6 +68,15 @@ async function handle(ctx, request, response) {
         respond(response, 200, { ok: true, labels: state.labels })
         return
       }
+      if (body !== null && typeof body === 'object' && body.action === 'lineage') {
+        const sessionId = typeof body.sessionId === 'string' ? body.sessionId : ''
+        if (sessionId.length === 0) {
+          respond(response, 400, { error: 'sessionId 必须是非空字符串' })
+          return
+        }
+        respond(response, 200, await buildLineage(ctx, sessionId))
+        return
+      }
       if (body !== null && typeof body === 'object' && body.action === 'forest') {
         const sessionId = typeof body.sessionId === 'string' ? body.sessionId : ''
         if (sessionId.length === 0) {
@@ -126,6 +135,34 @@ function readJson(request) {
 }
 
 /* ---------------------------------------------------------------- tree -- */
+
+/** Every catalogue session in the folder, with its root-session identity. */
+async function buildLineage(ctx, sessionId) {
+  const records = await ctx.sessionQuery.listSessions()
+  const byId = new Map(records.map((record) => [record.header.id, record]))
+  let target = byId.get(sessionId)
+  if (target === undefined) {
+    const snapshot = await ctx.sessionQuery.readSession(sessionId)
+    target = { header: snapshot.session }
+  }
+  const cwd = target.header.cwd ?? null
+  const sessions = []
+  for (const record of records) {
+    const header = record.header
+    if (header.origin === 'subagent') continue
+    if (cwd !== null && header.cwd !== cwd) continue
+    const root = rootOf(record, byId)
+    sessions.push({
+      id: header.id,
+      parentId: header.parentSession ?? null,
+      rootId: root.header.id,
+      title: typeof record.title === 'string' && record.title.trim() !== ''
+        ? record.title.trim()
+        : (typeof header.title === 'string' && header.title.trim() !== '' ? header.title.trim() : shortId(header.id)),
+    })
+  }
+  return { ok: true, sessionId, cwd, sessions }
+}
 
 /**
  * All root sessions that belong to the same folder (cwd) as `sessionId`.
