@@ -3,10 +3,10 @@
 ## Unreleased
 
 - Parent nodes now expose collapse/expand-children in the detail header. Collapsing a parent hides its whole subtree; expanding it restores the nested collapse state of its children, so a previously expanded child stays expanded. The canvas is laid out from the full tree, so ancestors above a collapsed/expanded node do not move.
-- Long-press a non-root node and drag it to the top drop banner to promote it to a new tree root. Promoted roots are stored per folder and appear as top-level roots in the all-trees canvas.
-- The tree header now switches between the current conversation tree (default) and an all-trees canvas showing every root conversation tree in the same folder (new host `forest` action), instead of a list.
+- Long-press a non-root node and drag it to the top drop banner to promote it to a new tree root. Promoted roots are stored per folder and listed in the all-trees list.
+- The tree header now switches between the current conversation tree (default) and a list of every root conversation tree in the same folder (new host `forest` action); clicking an item opens that tree.
 - The tree title is the root node's name; a node's detail title is its name (default: first 10 characters of its question plus an ellipsis). A promoted tree uses the promoted node as its default root/name.
-- The promote gesture and all-trees canvas need the updated Host route; restart the Host after updating.
+- The promote gesture and all-trees list need the updated Host route; restart the Host after updating.
 
 ## 0.5.3 — 2026-11-01
 

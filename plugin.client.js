@@ -419,20 +419,28 @@ window.__ModuleLoader__.load({
         const cached = treeDataCache.get(sessionId)
         if (cached !== undefined) {
           setState({ sessionId, loading: false, data: cached.data, error: null })
-          if (liveRevision !== null && liveRevision !== undefined && cached.revision !== liveRevision) {
+          if (cached.revision !== 'seed' && liveRevision !== null && liveRevision !== undefined && cached.revision !== liveRevision) {
             reload().catch(() => {})
           }
         } else {
           reload().catch(() => {})
         }
         const onRefresh = () => { reload().catch(() => {}) }
+        const onData = (event) => {
+          const detail = event.detail
+          if (detail === null || detail === undefined || detail.sessionId !== sessionId || detail.data === null || detail.data === undefined) return
+          treeDataCache.set(sessionId, { data: detail.data, revision: revisionRef.current })
+          setState({ sessionId, loading: false, data: detail.data, error: null })
+        }
         window.addEventListener('treecom:refresh', onRefresh)
+        window.addEventListener('treecom:data', onData)
         const runningTimer = liveRunning === true
           ? setInterval(() => { reload().catch(() => {}) }, 5_000)
           : null
         return () => {
           generation.current += 1
           window.removeEventListener('treecom:refresh', onRefresh)
+          window.removeEventListener('treecom:data', onData)
           if (runningTimer !== null) clearInterval(runningTimer)
         }
       }, [sessionId, liveRevision, liveRunning, reload])
@@ -2586,13 +2594,21 @@ window.__ModuleLoader__.load({
              the parent is still mounted, then switch. The child shares the
              same root/family as the parent, so this makes the tree appear
              immediately instead of showing a loading state after the switch. */
+          /* Seed the child session with the current family tree so switching
+             never waits on the full /treecom rebuild. The real child payload
+             is fetched in parallel and pushed into useTree when ready. */
+          treeDataCache.set(node.sessionId, { data, revision: 'seed' })
           const warm = fetchTree(node.sessionId).then((next) => {
             treeDataCache.set(node.sessionId, { data: next, revision: null })
-          }).catch(() => {})
-          await Promise.race([
-            warm,
-            new Promise((resolve) => setTimeout(resolve, 900)),
-          ])
+            try {
+              window.dispatchEvent(new CustomEvent('treecom:data', { detail: { sessionId: node.sessionId, data: next } }))
+            } catch { /* no CustomEvent in a non-browser harness */ }
+          }).catch(() => {
+            setTimeout(() => {
+              try { window.dispatchEvent(new Event('treecom:refresh')) } catch { /* ignore */ }
+            }, 1200)
+          })
+          void warm
           selectionIntent = null
           const workspace = appCtx?.get('uiWorkspace')
           if (workspace) {
@@ -3059,42 +3075,32 @@ window.__ModuleLoader__.load({
           className: `tc-mode-btn${treeMode === 'all' ? ' tc-mode-btn--active' : ''}`,
           onClick: () => setTreeMode('all'),
         }, translate('panel.allTrees')))
-      const forestActiveId = forestIndex !== null && forest !== null && typeof forest.sessionId === 'string'
-        ? (forestIndex.leaves.get(forest.sessionId)?.id ?? null)
-        : null
-      const forestRunning = forestIndex === null ? { generating: new Set(), childGenerating: new Set() } : runningNodesOf(forestIndex)
-      const allTreesNode = forestDisplayIndex === null
-        ? h('div', { className: 'tc-all-loading' },
-            forestLoading === true ? translate('panel.loading') : forestError !== null ? `${translate('panel.error')}：${forestError}` : translate('panel.allTreesEmpty'))
-        : h('div', { className: 'tc-workspace tc-workspace--all' },
-            h(TreeCanvas, {
-              index: forestDisplayIndex,
-              layoutIndex: forestDisplayIndex,
-              hiddenIds: new Set(),
-              selectedId: null,
-              activeId: forestActiveId,
-              selectedPath: new Set(),
-              afterFor: () => ({ n: 0, onPath: false }),
-              chainByRep: null,
-              chainByMember: null,
-              onExpand: () => {},
-              onCollapse: () => {},
-              onSelect: (node) => {
-                if (promoted.some((entry) => entry.nodeId === node.id)) {
-                  setViewRootId(node.id)
-                  setTreeMode('current')
-                  setSelectedId(node.id)
-                  return
-                }
-                if (node.kind === 'root') openTreeRoot(node.sessionId)
-              },
-              sessionId,
-              rootId: forest.rootId,
-              locked: false,
-              focusNodeId: null,
-              generatingIds: forestRunning.generating,
-              childGeneratingIds: forestRunning.childGenerating,
-            }))
+      const rootItems = forest?.roots ?? []
+      const promotedItems = promoted.filter((entry) => index !== null && index.byId.has(entry.nodeId))
+      const allTreesNode = h('div', { className: 'tc-all-trees' },
+        h('div', { className: 'tc-all-hint' }, translate('panel.allTreesHint')),
+        forestLoading === true ? h('div', { className: 'tc-all-loading' }, translate('panel.loading')) : null,
+        forestError !== null ? h('div', { className: 'tc-side-error' }, `${translate('panel.error')}：${forestError}`) : null,
+        h('div', { className: 'tc-all-list' },
+          rootItems.map((root) => h('button', {
+            key: `root:${root.id}`,
+            type: 'button',
+            className: `tc-all-tree${root.id === data.rootId ? ' tc-all-tree--current' : ''}`,
+            onClick: () => openTreeRoot(root.id),
+          },
+            h('span', { className: 'tc-all-tree-name' }, root.title),
+            h('span', { className: 'tc-all-tree-meta' }, root.id === data.rootId ? translate('panel.currentBadge') : ''))),
+          promotedItems.map((entry) => h('button', {
+            key: `promoted:${entry.nodeId}`,
+            type: 'button',
+            className: `tc-all-tree tc-all-tree--promoted${entry.nodeId === viewRootId ? ' tc-all-tree--current' : ''}`,
+            onClick: () => openPromoted(entry),
+          },
+            h('span', { className: 'tc-all-tree-name' }, entry.label),
+            h('span', { className: 'tc-all-tree-meta' }, translate('panel.promotedBadge'))))),
+        rootItems.length === 0 && promotedItems.length === 0 && forestLoading !== true
+          ? h('div', { className: 'tc-empty' }, translate('panel.allTreesEmpty'))
+          : null)
       return h('div', { className: `tc-panel tc-panel--${variant}`, 'aria-busy': treeLocked },
         h('div', { className: 'tc-head' },
           h('div', { className: 'tc-head-text' },
