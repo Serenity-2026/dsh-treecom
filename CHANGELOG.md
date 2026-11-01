@@ -3,6 +3,7 @@
 ## Unreleased
 
 - Blank forked branches can be asked directly from the tree detail pane; the question is sent to that branch's session, the tree selects the new turn, and the answer updates live without switching the current conversation.
+- The blank branch question field is now the normal 提问 box itself; it is no longer hidden by the tree-view composer CSS, and the answer appears in the ordinary 回答 box.
 
 ## Unreleased
 

@@ -2119,36 +2119,34 @@ window.__ModuleLoader__.load({
             : h('div', { className: 'tc-chat' },
                 loadError !== null ? h('div', { className: 'tc-side-error' }, fmt(translate('node.detailFailed'), { message: loadError })) : null,
                 chatHead('question', translate('node.questionLabel'), question),
-                h('div', { className: 'tc-chat-bubble tc-chat-bubble--user' }, question !== '' ? h(MarkdownText, { text: question }) : h('div', { className: 'tc-md-placeholder' }, translate('node.waiting'))),
+                node.kind === 'blank'
+                  ? h('div', { className: 'tc-branch-ask' },
+                      h('textarea', {
+                        className: 'tc-branch-ask-input',
+                        rows: 2,
+                        value: askText,
+                        placeholder: translate('node.askPlaceholder'),
+                        disabled: busy || sending,
+                        onChange: (event) => setAskText(event.target.value),
+                        onKeyDown: (event) => {
+                          if (event.key === 'Enter' && event.shiftKey !== true && event.isComposing !== true) {
+                            event.preventDefault()
+                            submitAsk()
+                          }
+                        },
+                      }),
+                      h('div', { className: 'tc-branch-ask-foot' },
+                        h('button', {
+                          type: 'button',
+                          className: 'tc-branch-ask-send',
+                          disabled: busy || sending || askText.trim() === '',
+                          onClick: submitAsk,
+                        }, sending ? translate('node.asking') : translate('node.askSend'))))
+                  : h('div', { className: 'tc-chat-bubble tc-chat-bubble--user' }, question !== '' ? h(MarkdownText, { text: question }) : h('div', { className: 'tc-md-placeholder' }, translate('node.waiting'))),
                 chatHead('answer', translate('node.answerLabel'), answer),
                 h('div', { className: `tc-chat-bubble tc-chat-bubble--assistant${loading ? ' tc-chat-bubble--loading' : ''}` }, h(MarkdownText, { text: answerText })),
                 detail?.truncated === true ? h('div', { className: 'tc-side-note' }, translate('node.detailTruncated')) : null,
-                detail?.time ? h('div', { className: 'tc-side-note' }, formatTime(detail.time)) : null),
-          node.kind === 'blank'
-            ? h('div', { className: 'tc-branch-ask' },
-                h('textarea', {
-                  className: 'tc-branch-ask-input',
-                  rows: 2,
-                  value: askText,
-                  placeholder: translate('node.askPlaceholder'),
-                  disabled: busy || sending,
-                  onChange: (event) => setAskText(event.target.value),
-                  onKeyDown: (event) => {
-                    if (event.key === 'Enter' && event.shiftKey !== true && event.isComposing !== true) {
-                      event.preventDefault()
-                      submitAsk()
-                    }
-                  },
-                }),
-                h('div', { className: 'tc-branch-ask-foot' },
-                  h('span', { className: 'tc-branch-ask-hint' }, translate('node.askHint')),
-                  h('button', {
-                    type: 'button',
-                    className: 'tc-branch-ask-send',
-                    disabled: busy || sending || askText.trim() === '',
-                    onClick: submitAsk,
-                  }, sending ? translate('node.asking') : translate('node.askSend'))))
-            : null))
+                detail?.time ? h('div', { className: 'tc-side-note' }, formatTime(detail.time)) : null)))
     }
 
     /* ---------------------------------------------------------- panel -- */
@@ -2960,7 +2958,7 @@ window.__ModuleLoader__.load({
 .tc-branch-action:hover:not(:disabled){background:var(--dsw-alias-bg-layer-2);border-color:var(--dsw-alias-border-l2);color:var(--dsw-alias-label-primary)}
 .tc-branch-action:disabled{opacity:.45;cursor:not-allowed}
 .tc-action-error{margin-left:2px;color:var(--dsw-alias-state-error-primary);font-weight:700;cursor:help}
-body.tc-view-tree-open [data-composer-seat],body.tc-view-tree-open [data-conversation-region="composer"],body.tc-view-tree-open [data-composer-card],body.tc-view-tree-open [data-composer-input],body.tc-view-tree-open [data-composer-dock],body.tc-view-tree-open [data-composer-overlay],body.tc-view-tree-open [data-conversation-composer-overlay],body.tc-view-tree-open [contenteditable="true"],body.tc-view-tree-open textarea{display:none!important}
+body.tc-view-tree-open [data-composer-seat],body.tc-view-tree-open [data-conversation-region="composer"],body.tc-view-tree-open [data-composer-card],body.tc-view-tree-open [data-composer-input],body.tc-view-tree-open [data-composer-dock],body.tc-view-tree-open [data-composer-overlay],body.tc-view-tree-open [data-conversation-composer-overlay],body.tc-view-tree-open [contenteditable="true"],body.tc-view-tree-open textarea:not(.tc-branch-ask-input){display:none!important}
 body.tc-view-tree-open [data-width-handle]{pointer-events:none!important;cursor:default!important}
 body.tc-view-tree-open [data-width-handle]::after{display:none!important}
 .tc-sidebar-body{height:100%;min-height:0;display:flex;flex-direction:column;overflow:hidden}
@@ -3096,12 +3094,11 @@ body.tc-view-tree-open [data-width-handle]::after{display:none!important}
 .tc-chat-bubble--user{max-height:116px}
 .tc-chat-bubble::-webkit-scrollbar{width:6px}
 .tc-chat-bubble::-webkit-scrollbar-thumb{background:var(--dsw-alias-border-l2);border-radius:3px}
-.tc-branch-ask{display:flex;flex-direction:column;gap:6px;margin-top:2px;padding-top:11px;border-top:1px solid var(--dsw-alias-border-l1)}
+.tc-branch-ask{display:flex;flex-direction:column;gap:6px;margin-top:2px}
 .tc-branch-ask-input{width:100%;box-sizing:border-box;min-height:58px;max-height:160px;resize:vertical;padding:8px 10px;border:1px solid var(--dsw-alias-border-l2);border-radius:8px;background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-primary);font:inherit;font-size:12px;line-height:1.5;outline:none}
 .tc-branch-ask-input:focus{border-color:var(--dsw-alias-state-business-primary);box-shadow:0 0 0 2px color-mix(in srgb,var(--dsw-alias-state-business-primary) 16%,transparent)}
 .tc-branch-ask-input:disabled{opacity:.6}
-.tc-branch-ask-foot{display:flex;align-items:center;justify-content:space-between;gap:8px}
-.tc-branch-ask-hint{color:var(--dsw-alias-label-tertiary);font-size:10.5px;line-height:1.4}
+.tc-branch-ask-foot{display:flex;align-items:center;justify-content:flex-end;gap:8px}
 .tc-branch-ask-send{flex:0 0 auto;padding:5px 12px;border:1px solid var(--dsw-alias-state-business-primary);border-radius:7px;background:var(--dsw-alias-state-business-primary);color:var(--dsw-alias-bg-base);font:inherit;font-size:11.5px;font-weight:600;cursor:pointer}
 .tc-branch-ask-send:hover:not(:disabled){filter:brightness(1.08)}
 .tc-branch-ask-send:disabled{cursor:default;opacity:.45}
