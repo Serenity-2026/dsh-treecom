@@ -1,6 +1,6 @@
 {
   "name": "treecom",
-  "version": "0.5.2",
+  "version": "0.5.3",
   "type": "module",
   "description": "Tree-shaped conversation branching for DeepSeek Harness: one visible conversation, a right-sidebar tree and Conversation \"Tree\" view, and branch-from-any-turn.",
   "license": "MIT",
