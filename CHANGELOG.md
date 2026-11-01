@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.0.3 — 2026-11-01
+
+- Fix the duplicate client factory crash on boot: align the bundle id, the Host row id, and the client module id to `dsh-treecom`. The internal slot namespace, `/treecom` route, and conversation view id stay `treecom`, so existing UI data is unchanged.
+
 ## 1.0.2 — 2026-11-01
 
 - Docs: add the runtime screenshot and simplify the README. No plugin code changes; the `assets/` folder is included in the npm package.

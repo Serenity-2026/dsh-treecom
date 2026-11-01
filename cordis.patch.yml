@@ -3,5 +3,5 @@
 # package.json and registers the floating tree panel, the header entry, and the
 # Conversation "Tree" view.
 - insert:
-    - id: treecom
+    - id: dsh-treecom
       name: dsh-treecom

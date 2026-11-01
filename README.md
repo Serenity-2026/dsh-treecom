@@ -4,7 +4,7 @@
 
 ![TreeCom 对话树界面](assets/runtime.webp)
 
-版本 **1.0.2** · MIT · DeepSeek Harness Web 插件
+版本 **1.0.3** · MIT · DeepSeek Harness Web 插件
 
 ## 功能介绍
 

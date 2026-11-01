@@ -9,7 +9,7 @@
  * Plain JS, React from the page's module table, no build step.
  */
 window.__ModuleLoader__.load({
-  id: 'treecom',
+  id: 'dsh-treecom',
   factory(require) {
     const React = require('react')
     const h = React.createElement
