@@ -195,7 +195,19 @@ async function buildForest(ctx, sessionId) {
     })
   }
   roots.sort((left, right) => (right.createdAt ?? 0) - (left.createdAt ?? 0))
+  const idsByRoot = new Map()
+  for (const record of records) {
+    const header = record.header
+    if (header.origin === 'subagent') continue
+    if (cwd !== null && header.cwd !== cwd) continue
+    const owner = rootOf(record, byId).header.id
+    const list = idsByRoot.get(owner)
+    if (list === undefined) idsByRoot.set(owner, [header.id])
+    else list.push(header.id)
+  }
   for (const root of roots) {
+    root.sessionIds = idsByRoot.get(root.id) ?? [root.id]
+    root.sessionCount = root.sessionIds.length
     const record = byId.get(root.id)
     if (record === undefined) continue
     try {

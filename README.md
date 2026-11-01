@@ -128,3 +128,5 @@ The tree title is the name of its root node. In the detail header, each node is 
 ### Grouped left sidebar
 
 Sessions in the left sidebar are grouped by their conversation tree root. Each group gets a folder row with a chevron: clicking it collapses or expands every fork under that root. The folder for the tree containing the currently selected conversation shows a small green dot before its folder icon.
+
+- Tree folder headers and all-tree rows have a delete action; deleting a tree asks for confirmation and archives every conversation in it.

@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Group conversation trees under their workspace, with an in-place chevron and a blue tree icon when expanded.
+- Add delete actions to tree folders and the all-trees list; confirm, then archive every session in that tree.
+
 - The left conversation sidebar now groups sessions by conversation tree. Each root has a folder row that expands/collapses all of its forks, and the folder of the tree containing the selected conversation shows a small green dot.
 
 - Parent nodes now expose collapse/expand-children in the detail header. Collapsing a parent hides its whole subtree; expanding it restores the nested collapse state of its children, so a previously expanded child stays expanded. The canvas is laid out from the full tree, so ancestors above a collapsed/expanded node do not move.

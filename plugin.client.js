@@ -67,6 +67,15 @@ window.__ModuleLoader__.load({
       'node.archive': '归档',
       'node.archiveHint': '归档这个分支',
       'node.archivedToast': '已归档',
+      'treeDelete.action': '删除对话树',
+      'treeDelete.title': '删除对话树',
+      'treeDelete.message': '确定删除「{title}」吗？该对话树下的 {n} 个会话都会被归档。',
+      'treeDelete.confirm': '删除并归档',
+      'treeDelete.cancel': '取消',
+      'treeDelete.deleting': '正在归档…',
+      'treeDelete.failed': '归档失败：{message}',
+      'treeDelete.partial': '{n} 个会话归档失败',
+      'treeDelete.done': '已归档 {n} 个会话',
       'node.renamePlaceholder': '给这个分支起个名字',
       'node.turn': '第 {n} 轮',
       'node.depth': '分支深度 {n}',
@@ -164,6 +173,15 @@ window.__ModuleLoader__.load({
       'node.archive': 'Archive',
       'node.archiveHint': 'Archive this branch',
       'node.archivedToast': 'Archived',
+      'treeDelete.action': 'Delete tree',
+      'treeDelete.title': 'Delete conversation tree',
+      'treeDelete.message': 'Delete “{title}”? All {n} conversations in this tree will be archived.',
+      'treeDelete.confirm': 'Delete and archive',
+      'treeDelete.cancel': 'Cancel',
+      'treeDelete.deleting': 'Archiving…',
+      'treeDelete.failed': 'Archive failed: {message}',
+      'treeDelete.partial': '{n} conversations could not be archived',
+      'treeDelete.done': 'Archived {n} conversations',
       'node.renamePlaceholder': 'Name this branch',
       'node.turn': 'Turn {n}',
       'node.depth': 'Branch depth {n}',
@@ -740,6 +758,11 @@ window.__ModuleLoader__.load({
           return h('svg', common, h('path', { d: 'M4 4l8 8M12 4l-8 8' }))
         case 'archive':
           return h('svg', common, h('path', { d: 'M2.5 3.5h11v2.2h-11zM4 5.7v6.8h8V5.7M6.3 8.2h3.4' }))
+        case 'trash':
+          return h('svg', common,
+            h('path', { d: 'M3.5 4.5h9M6 4.5V3.2h4v1.3' }),
+            h('path', { d: 'M5 6.6v5.1M8 6.6v5.1M11 6.6v5.1' }),
+            h('path', { d: 'M4.2 4.5l.6 8.3h6.4l.6-8.3' }))
         case 'dot':
           return h('svg', common, h('circle', { cx: 8, cy: 8, r: 2.4, fill: 'currentColor', stroke: 'none' }))
         case 'copy':
@@ -2380,6 +2403,8 @@ window.__ModuleLoader__.load({
       const [overrides, setOverrides] = useState({})
       const [refreshing, setRefreshing] = useState(false)
       const [toast, setToast] = useState(null)
+      const [forestSeq, setForestSeq] = useState(0)
+      const archiveTreeRef = useRef(null)
       const [forkPhase, setForkPhase] = useState(null)
       const [asking, setAsking] = useState(false)
       const [focusNodeId, setFocusNodeId] = useState(null)
@@ -2470,7 +2495,7 @@ window.__ModuleLoader__.load({
           }
         })
         return () => { cancelled = true }
-      }, [treeMode, sessionId, data?.rootId])
+      }, [treeMode, sessionId, data?.rootId, forestSeq])
 
       useEffect(() => {
         setOverrides({})
@@ -2692,6 +2717,47 @@ window.__ModuleLoader__.load({
           setNotice(fmt(translate('notice.archiveFailed'), { message: noticeText(archiveError) }))
         }
       }
+
+      const archiveTree = async (ids) => {
+        const workspace = appCtx?.get('uiWorkspace')
+        if (!workspace) throw new Error(translate('notice.noService'))
+        const unique = [...new Set((ids ?? []).filter((id) => typeof id === 'string' && id !== ''))]
+        if (unique.length === 0) return
+        setBusy(true)
+        try {
+          const failed = []
+          for (const id of unique) {
+            try {
+              await workspace.archiveSession(id)
+            } catch {
+              failed.push(id)
+            }
+          }
+          setForestSeq((value) => value + 1)
+          refreshAll()
+          if (failed.length > 0) {
+            throw new Error(fmt(translate('treeDelete.partial'), { n: failed.length }))
+          }
+          showToast(fmt(translate('treeDelete.done'), { n: unique.length }))
+        } finally {
+          setBusy(false)
+        }
+      }
+      archiveTreeRef.current = archiveTree
+
+      useEffect(() => {
+        const handler = (root, title, ids) => {
+          showTreeDeleteConfirm({
+            title,
+            count: ids.length,
+            onConfirm: () => archiveTreeRef.current?.(ids),
+          })
+        }
+        sidebarTreeDeleteHandler = handler
+        return () => {
+          if (sidebarTreeDeleteHandler === handler) sidebarTreeDeleteHandler = null
+        }
+      }, [])
 
       const toggleCollapsed = (id) => {
         setCollapsed((current) => {
@@ -3095,14 +3161,31 @@ window.__ModuleLoader__.load({
         forestLoading === true ? h('div', { className: 'tc-all-loading' }, translate('panel.loading')) : null,
         forestError !== null ? h('div', { className: 'tc-side-error' }, `${translate('panel.error')}：${forestError}`) : null,
         h('div', { className: 'tc-all-list' },
-          rootItems.map((root) => h('button', {
-            key: `root:${root.id}`,
-            type: 'button',
-            className: `tc-all-tree${root.id === data.rootId ? ' tc-all-tree--current' : ''}`,
-            onClick: () => openTreeRoot(root.id),
-          },
-            h('span', { className: 'tc-all-tree-name' }, root.title),
-            h('span', { className: 'tc-all-tree-meta' }, root.id === data.rootId ? translate('panel.currentBadge') : ''))),
+          rootItems.map((root) => {
+            const treeSessionIds = Array.isArray(root.sessionIds) && root.sessionIds.length > 0 ? root.sessionIds : [root.id]
+            return h('div', { key: `root:${root.id}`, className: 'tc-all-tree-row' },
+              h('button', {
+                type: 'button',
+                className: `tc-all-tree${root.id === data.rootId ? ' tc-all-tree--current' : ''}`,
+                onClick: () => openTreeRoot(root.id),
+              },
+                h('span', { className: 'tc-all-tree-name' }, root.title),
+                h('span', { className: 'tc-all-tree-meta' }, root.id === data.rootId ? translate('panel.currentBadge') : '')),
+              h('button', {
+                type: 'button',
+                className: 'tc-all-tree-delete',
+                title: translate('treeDelete.action'),
+                'aria-label': translate('treeDelete.action'),
+                onClick: (event) => {
+                  event.stopPropagation()
+                  showTreeDeleteConfirm({
+                    title: root.title,
+                    count: treeSessionIds.length,
+                    onConfirm: () => archiveTree(treeSessionIds),
+                  })
+                },
+              }, h(Icon, { name: 'trash', size: 13 })))
+          }),
           promotedItems.map((entry) => h('button', {
             key: `promoted:${entry.nodeId}`,
             type: 'button',
@@ -3376,6 +3459,10 @@ body.tc-view-tree-open [data-width-handle]::after{display:none!important}
 .tc-all-hint{color:var(--dsw-alias-label-tertiary);font-size:11px;line-height:1.45}
 .tc-all-loading{color:var(--dsw-alias-label-tertiary);font-size:11px}
 .tc-all-list{display:flex;flex-direction:column;gap:6px}
+.tc-all-tree-row{display:flex;align-items:stretch;gap:4px;min-width:0}
+.tc-all-tree-row .tc-all-tree{flex:1 1 auto;min-width:0}
+.tc-all-tree-delete{flex:none;display:inline-flex;align-items:center;justify-content:center;width:32px;padding:0;border:1px solid var(--dsw-alias-border-l1);border-radius:8px;background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-tertiary);cursor:pointer;opacity:.6}
+.tc-all-tree-delete:hover{color:var(--dsw-alias-state-error-primary,#dc2626);border-color:var(--dsw-alias-state-error-primary,#dc2626);opacity:1}
 .tc-all-tree{display:flex;align-items:center;justify-content:space-between;gap:10px;text-align:left;width:100%;padding:9px 11px;border:1px solid var(--dsw-alias-border-l1);border-radius:8px;background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-primary);font:inherit;cursor:pointer}
 .tc-all-tree:hover{border-color:var(--dsw-alias-state-business-primary)}
 .tc-all-tree--current{border-color:var(--dsw-alias-state-business-primary);background:color-mix(in srgb,var(--dsw-alias-state-business-primary) 8%,var(--dsw-alias-bg-layer-1))}
@@ -3540,12 +3627,27 @@ body.tc-view-tree-open [data-width-handle]::after{display:none!important}
 .tc-left-tree-head:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}
 .tc-left-tree-head:focus-visible{box-shadow:0 0 0 2px var(--dsw-alias-state-business-primary)}
 .tc-left-tree-head--current{color:var(--dsw-alias-label-primary)}
-.tc-left-tree-chevron{flex:none;width:13px;color:var(--dsw-alias-label-tertiary);font-size:12px;transform:rotate(90deg);transition:transform .15s ease}
+.tc-left-tree-chevron{flex:none;display:inline-flex;align-items:center;justify-content:center;width:13px;height:20px;color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:1;transform:rotate(90deg);transform-origin:50% 50%;transition:transform .15s ease}
 .tc-left-tree-head--collapsed .tc-left-tree-chevron{transform:rotate(0)}
+.tc-left-tree-head:not(.tc-left-tree-head--collapsed) .tc-left-tree-folder{color:var(--dsw-alias-state-business-primary)}
 .tc-left-tree-folder{flex:none;display:inline-flex;align-items:center;justify-content:center;color:var(--dsw-alias-label-secondary)}
+.tc-left-tree-folder svg{width:15px;height:15px}
+.tc-left-tree-delete{flex:none;display:inline-flex;align-items:center;justify-content:center;width:20px;height:20px;padding:0;border:0;border-radius:4px;background:none;color:var(--dsw-alias-label-tertiary);cursor:pointer;opacity:.5}
+.tc-left-tree-delete:hover{color:var(--dsw-alias-state-error-primary,#dc2626);background:color-mix(in srgb,var(--dsw-alias-state-error-primary,#dc2626) 12%,transparent);opacity:1}
+.tc-left-tree-delete:focus-visible{outline:2px solid var(--dsw-alias-state-business-primary);outline-offset:1px;opacity:1}
 .tc-left-tree-name{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .tc-left-tree-count{flex:none;margin-left:auto;color:var(--dsw-alias-label-tertiary);font-size:10.5px;font-weight:500;font-variant-numeric:tabular-nums}
 .tc-left-tree-dot{flex:none;width:6px;height:6px;border-radius:50%;background:var(--dsw-alias-state-success-primary);box-shadow:0 0 0 2px color-mix(in srgb,var(--dsw-alias-state-success-primary) 18%,transparent)}
+.tc-confirm-backdrop{position:fixed;inset:0;z-index:2147483000;display:flex;align-items:center;justify-content:center;padding:20px;background:rgba(0,0,0,.42)}
+.tc-confirm{width:min(380px,92vw);box-sizing:border-box;padding:18px;border:1px solid var(--dsw-alias-border-l2);border-radius:12px;background:var(--dsw-alias-bg-layer-1);box-shadow:0 18px 50px rgba(0,0,0,.35);color:var(--dsw-alias-label-primary)}
+.tc-confirm-title{font-size:14px;font-weight:700;line-height:1.4}
+.tc-confirm-message{margin-top:8px;color:var(--dsw-alias-label-secondary);font-size:12px;line-height:1.65;word-break:break-word}
+.tc-confirm-error{margin-top:8px;color:var(--dsw-alias-state-error-primary,#dc2626);font-size:11px;line-height:1.5}
+.tc-confirm-actions{display:flex;justify-content:flex-end;gap:8px;margin-top:16px}
+.tc-confirm-btn{padding:6px 14px;border:1px solid var(--dsw-alias-border-l2);border-radius:7px;background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-primary);font:inherit;font-size:12px;cursor:pointer}
+.tc-confirm-btn:hover:not(:disabled){border-color:var(--dsw-alias-label-tertiary)}
+.tc-confirm-btn--danger{border-color:var(--dsw-alias-state-error-primary,#dc2626);background:var(--dsw-alias-state-error-primary,#dc2626);color:#fff;font-weight:600}
+.tc-confirm-btn:disabled{cursor:default;opacity:.55}
 [data-treecom-left-row="true"]{margin-left:16px;width:calc(100% - 16px);box-sizing:border-box}
 [data-treecom-left-row="true"].tc-left-tree-row--collapsed{display:none!important}
 
@@ -3554,6 +3656,99 @@ body.tc-view-tree-open [data-width-handle]::after{display:none!important}
     /* ------------------------------------------- grouped left sidebar -- */
 
     const SIDEBAR_COLLAPSED_KEY = 'treecom:sidebar-trees-collapsed'
+
+    let sidebarTreeDeleteHandler = null
+    let activeTreeConfirm = null
+
+    function closeTreeDeleteConfirm() {
+      if (activeTreeConfirm === null) return
+      const close = activeTreeConfirm
+      activeTreeConfirm = null
+      close()
+    }
+
+    /** DOM-level confirmation so both the injected left rows and React all-trees can use it. */
+    function showTreeDeleteConfirm({ title, count, onConfirm }) {
+      closeTreeDeleteConfirm()
+      if (typeof document === 'undefined') return
+      const backdrop = document.createElement('div')
+      backdrop.className = 'tc-confirm-backdrop'
+      const dialog = document.createElement('div')
+      dialog.className = 'tc-confirm'
+      dialog.setAttribute('role', 'dialog')
+      dialog.setAttribute('aria-modal', 'true')
+      dialog.setAttribute('aria-labelledby', 'tc-confirm-title')
+      const heading = document.createElement('div')
+      heading.className = 'tc-confirm-title'
+      heading.id = 'tc-confirm-title'
+      heading.textContent = translate('treeDelete.title')
+      const message = document.createElement('div')
+      message.className = 'tc-confirm-message'
+      message.textContent = fmt(translate('treeDelete.message'), { title, n: count })
+      const error = document.createElement('div')
+      error.className = 'tc-confirm-error'
+      error.hidden = true
+      const actions = document.createElement('div')
+      actions.className = 'tc-confirm-actions'
+      const cancel = document.createElement('button')
+      cancel.type = 'button'
+      cancel.className = 'tc-confirm-btn'
+      cancel.textContent = translate('treeDelete.cancel')
+      const confirm = document.createElement('button')
+      confirm.type = 'button'
+      confirm.className = 'tc-confirm-btn tc-confirm-btn--danger'
+      confirm.textContent = translate('treeDelete.confirm')
+      actions.append(cancel, confirm)
+      dialog.append(heading, message, error, actions)
+      backdrop.append(dialog)
+      document.body.append(backdrop)
+      let busy = false
+      let closed = false
+      const close = () => {
+        if (closed) return
+        closed = true
+        if (activeTreeConfirm === close) activeTreeConfirm = null
+        document.removeEventListener('keydown', onKeyDown, true)
+        backdrop.remove()
+      }
+      activeTreeConfirm = close
+      const onKeyDown = (event) => {
+        if (event.key === 'Escape') {
+          if (busy) return
+          event.preventDefault()
+          close()
+        }
+      }
+      backdrop.addEventListener('click', (event) => {
+        if (busy || event.target !== backdrop) return
+        close()
+      })
+      cancel.addEventListener('click', () => {
+        if (!busy) close()
+      })
+      confirm.addEventListener('click', async () => {
+        if (busy) return
+        busy = true
+        cancel.disabled = true
+        confirm.disabled = true
+        confirm.textContent = translate('treeDelete.deleting')
+        try {
+          await onConfirm()
+          close()
+        } catch (errorValue) {
+          error.hidden = false
+          error.textContent = fmt(translate('treeDelete.failed'), {
+            message: errorValue instanceof Error ? errorValue.message : String(errorValue),
+          })
+          busy = false
+          cancel.disabled = false
+          confirm.disabled = false
+          confirm.textContent = translate('treeDelete.confirm')
+        }
+      })
+      document.addEventListener('keydown', onKeyDown, true)
+      cancel.focus()
+    }
 
     function installSidebarTreeGrouping(sessions) {
       if (typeof document === 'undefined' || typeof window === 'undefined') return () => {}
@@ -3627,6 +3822,7 @@ body.tc-view-tree-open [data-width-handle]::after{display:none!important}
         try { localStorage.setItem(SIDEBAR_COLLAPSED_KEY, JSON.stringify([...collapsed])) } catch { /* private mode */ }
       }
       const folderSvg = () => '<svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.2" aria-hidden="true"><circle cx="8" cy="3.2" r="1.35"/><path d="M8 4.6v2.2M8 6.8H4.2v2.2M8 6.8h3.8v2.2"/><circle cx="4.2" cy="10.5" r="1.2"/><circle cx="11.8" cy="10.5" r="1.2"/></svg>'
+      const deleteSvg = () => '<svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" aria-hidden="true"><path d="M3.5 4.5h9M6 4.5V3.2h4v1.3M5 6.6v5.1M8 6.6v5.1M11 6.6v5.1M4.2 4.5l.6 8.3h6.4l.6-8.3"/></svg>'
 
       const apply = () => {
         if (disposed) return
@@ -3723,7 +3919,24 @@ body.tc-view-tree-open [data-width-handle]::after{display:none!important}
                 dot.title = translate('node.youAreHere')
                 head.append(dot)
               }
-              head.append(folder, name, count)
+              const remove = document.createElement('button')
+              remove.type = 'button'
+              remove.className = 'tc-left-tree-delete'
+              remove.title = translate('treeDelete.action')
+              remove.setAttribute('aria-label', translate('treeDelete.action'))
+              remove.innerHTML = deleteSvg()
+              remove.addEventListener('click', (event) => {
+                event.preventDefault()
+                event.stopPropagation()
+                const ids = group.rows
+                  .map((row) => row.getAttribute('data-row-key') ?? '')
+                  .filter((key) => key.startsWith('session:'))
+                  .map((key) => key.slice(8))
+                if (typeof sidebarTreeDeleteHandler === 'function') {
+                  sidebarTreeDeleteHandler(group.root, title, ids)
+                }
+              })
+              head.append(folder, name, count, remove)
               const toggle = (event) => {
                 if (event !== undefined) { event.preventDefault(); event.stopPropagation() }
                 if (collapsed.has(group.root)) collapsed.delete(group.root)
